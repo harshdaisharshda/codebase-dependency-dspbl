@@ -1,0 +1,303 @@
+# ARCHITECTURE.md — Codebase Dependency Analyzer
+
+**Status:** v2.1 — Decisions approved by the team (2026-11-07) and locked in §9.
+No application code exists yet; detailed class interfaces are deliberately
+**deferred** until implementation begins (Phase 1 planning next).
+
+> Note: the synopsis is a **Word document**, not the PDF initially referenced
+> (`docs/Project_Synopsis_Codebase_Dependency_Analyzer.docx`). The file is
+> **preserved unchanged**, and its folder was renamed from `docs ` (trailing
+> space) to `docs/` — all documentation references this real path.
+
+---
+
+## 1. Project overview
+
+A **console-based, menu-driven C++ application** (per the synopsis: "menu that
+lets the user choose operations", `cin`/`cout`) that scans a C/C++ project
+directory, reads each source/header file, and extracts its `#include`
+relationships. The relationships form a **directed graph**:
+
+- **Node = a source/header file**
+- **Directed edge `A → B` = "A includes B", i.e., A depends on B**
+
+On this graph the program answers practical questions a developer has about a
+codebase: what will break if this file changes, in what order should files be
+compiled, are there circular dependencies, which modules areLoad the most
+depended-upon, what is the deepest chain of dependencies, and does a dependency
+path exist between two given files? Every course data structure is used where it
+naturally belongs, so the program doubles as a live demonstration for viva
+examination.
+
+### 1.1 Worked example from the synopsis
+
+```
+my-project/                          dependency tree produced by the analyzer
+ ├── main.cpp                        main
+ ├── utils.cpp                        ├── api
+ ├── graph.cpp                        │    └── database
+ ├── database.cpp                     └── utils
+ └── api.cpp
+```
+
+The console output must be able to show this indented tree/levels form.
+
+---
+
+## 2. Requirements (consolidated)
+
+### 2.1 Functional features — from the synopsis (authoritative)
+
+| # | Feature | What it must do | Synopsis-mandated approach |
+|---|---------|-----------------|---------------------------|
+| F1 | Build Dependency Graph | parse scanned files, build directed graph | `#include` extraction, adjacency lists |
+| F2 | Detect Circular Dependencies | find cycles that would break the build | DFS; stack tracks "files currently on the recursion stack"; an edge back to an on-stack file is a cycle |
+| F3 | Find Files Affected By A Change | from a changed file, find every file that transitively depends on it | BFS expanding **level by level** (this means traversing *dependents*, i.e., reverse edges) |
+| F4 | Topological Ordering | compile order: every file after its dependencies | topological sort (Kahn-style queue algorithm) |
+| F5 | Deepest Dependency Chain | longest/most deeply nested dependency chain | DFS exploration ("recursion" topic) |
+| F6 | Highly Connected Modules | files most depended-upon | rank by **in-degree** using a max heap |
+| F7 | Search Files | fast prefix search over filenames (+ existence check) | Trie (autocomplete-friendly) |
+| F8 | Dependency Path Between Files | does a path `A → B` exist; display it | graph path finding |
+| F9 | Save Analysis Report *(optional per synopsis)* | write analysis output to a file for later reference | `fstream` report writing |
+
+### 2.2 Required data structures & concepts (authoritative synopsis mapping)
+
+| Structure | Synopsis role in our system |
+|-----------|------------------------------|
+| Directed Graph | the core model; adjacency lists store "files I depend on" |
+| DFS | chain exploration, deepest path, reachability |
+| Stack | DFS frames; cycle detection via on-stack tracking |
+| Queue | BFS frontier for impact analysis |
+| Hash Table | file name → its dependencies/dependents record; constant-time lookup building & querying the graph |
+| Trie | filename prefix search / existence |
+| Heap (max) | rank by in-degree → extract top-k most depended-upon |
+| Linked List | adjacency list storage per file |
+
+### 2.3 Topics the synopsis commits us to
+
+Graph algorithms · **Recursion** (DFS, cycle detection, deepest chain) ·
+**File handling** (read sources, parse includes, optionally save reports) ·
+Standard I/O · **Menu-driven** UI.
+
+> Implementation note (**approved decision**): the synopsis lists *Recursion* as a
+> required topic and describes the stack as tracking the *recursion stack*.
+> Per the team decision (2026-11-07):
+> - DFS (cycle detection, reachability, deepest-chain exploration) is implemented
+>   **recursively** — recursion is demonstrated explicitly and matches the synopsis
+>   wording ("files currently on the recursion stack").
+> - A documented **recursion-depth guard** protects against pathologically deep
+>   graphs: the program reports "graph too deep to analyze with recursion" and
+>   suggests running on a smaller subtree instead of crashing.
+> - Our own **Stack** class (a required data structure) is used meaningfully
+>   elsewhere: chiefly **path/cycle reconstruction** — a parent chain is pushed
+>   onto the Stack and popped to print a dependency path or a cycle in correct
+>   edge order (F2/F8). No STL container ever replaces a required custom
+>   data structure.
+
+### 2.4 Instructor addendum (NOT in the synopsis — must not be confused with it)
+
+- **Six meaningful BFS variations/applications** — see §5. These implement the
+  instructor's addendum and serve synopsis features (they do not add new user
+  features). **Provisional:** kept as proposed (B1–B6) per team decision
+  2026-11-07; they are *not* claimed to be the instructor's exact mandated
+  algorithm list until the instructor confirms it (see §9).
+- **Benchmarking** those six variants: execution times + operational counters,
+  exported to CSV, honestly reported.
+
+### 2.5 Documented limitations of include analysis (approved, user-facing)
+
+- Angle-bracket includes (`<...>`) are treated as system dependencies — not project edges.
+- `#include` directives inside comments are ignored; conditional-compilation
+  directives (`#ifdef`, `#if`, ...) are **not evaluated** — an include under any
+  branch of a conditional is treated as a real dependency.
+- No preprocessor support: macro-*generated* includes (`#include MACRO_NAME`) are
+  not resolved.
+- Include search uses only the two approved roots (includer's directory, project
+  root) — no additional `-I` paths.
+- I/O errors and unresolvable targets surface as scan Warnings, never as
+  invented edges.
+
+---
+
+## 3. Architectural goals (for a 3-person, II-semester-scope project)
+
+1. **Correctness first:** every algorithm output can be validated by hand on the
+   bundled sample project.
+2. **Every required DS is load-bearing** — its use must be justified in the viva
+   (mapping table above) — no decorative containers.
+3. **Layered but simple:** scanning/parsing, graph, analytics, menu are separate
+   layers with one-directional dependencies; a second-year student can read any
+   file in isolation.
+4. **Memory-safe:** RAII, no leaks, ownership explicit and documented.
+5. **Reproducible benchmarks:** seeded generative graphs, static CSV schema.
+6. **Docs-as-contract:** ARCHITECTURE/DEVELOPMENT_PLAN/TESTING_STRATEGY evolve
+   with code; TASK_LOG records every work session.
+
+---
+
+## 4. Module breakdown (high level; detailed interfaces come later)
+
+```
+┌────────────────────────────── Console application ───────────────────────────────┐
+│  Menu UI (cin/cout, feature selection, trees/levels output, report saving)       │
+├─────────────────────────────────────┬────────────────────────────────────────────┤
+│  Scanning & Parsing                 │  Analytics engines                         │
+│  walk project tree (filesystem)     │  cycle detection (DFS+Stack, SCC)          │
+│  read files, extract #include       │  impact analysis (BFS on reverse edges)    │
+│  resolve paths → node ids (Hash)    │  topological order (BFS-queue Kahn)        │
+│  build graph (Linked List adjac.)   │  deepest chain (DFS/DP on DAG)             │
+│  populate Trie names                │  hub ranking (MaxHeap on in-degree)        │
+│                                     │  path search (bidirectional BFS)           │
+│                                     │  prefix search (Trie)                      │
+├─────────────────────────────────────┴────────────────────────────────────────────┤
+│  Graph model: nodes (int ids), forward adjacency lists, reverse adjacency lists, │
+│               in-degree/out-degree counts, name↔id Hash Table                    │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│  Custom DS library (pure, self-contained): LinkedList, Stack, Queue, HashTable,  │
+│  Trie, MaxHeap, small dynamic numeric arrays                                                     │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│  Benchmark suite (separate mode): seeded graph generators, steady_clock timing,  │
+│  6-BFS comparison runner, CSV writer                                             │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Dependency direction: Menu → Analytics → Graph model → DS library. Scanning
+feeds the Graph model and Trie; anything higher never touches scanning internals.
+
+---
+
+## 5. The six BFS variations (instructor addendum)
+
+Direction convention: edge `A → B` = A depends on B. "Forward" = follow includes;
+"Reverse" = follow dependents (needed by F3).
+
+| # | Variation | Serves feature | What is different about the *algorithm* | Expected behaviour |
+|---|-----------|----------------|------------------------------------------|--------------------|
+| B1 | **Single-source BFS (forward)** | reachability view of F1/F5 support: what A transitively depends on | classic FIFO level-by-level | visits O(V+E) |
+| B2 | **Multi-source BFS** | F4 topological sort (Kahn's algorithm seeds the queue with **all** in-degree-0 files); also "several files changed at once" impact on reverse edges | multiple seeds at level 0; waves = compile batches | O(V+E), level ordering |
+| B3 | **Bidirectional BFS** | F8 path A→B between two files | two frontiers (one forward from A, one reverse from B), alternate expanding the smaller one, meet in the middle | dramatically fewer vertices on hub-rich graphs: O(b^(d/2)) for path length d vs BFS's O(b^d) |
+| B4 | **Reverse-graph BFS (single source)** | F3 impact analysis engine: who transitively depends on changed file | BFS over **predecessor** adjacency | O(V+E), levels = distance from changed file |
+| B5 | **Bounded-depth BFS** | "look only N hops ahead" mode of F3/F7-like views (direct deps vs. deep groups) | FIFO with per-level counter stopping at maxDepth | O(V + E_k) where E_k = edges within k levels |
+| B6 | **Depth-optimizing BFS** | performance mode for B1/B4 on large graphs (benchmark showcase, no new user feature) | starts top-down (push from frontier); when frontier becomes dense switches bottom-up (unclaimed nodes check their predecessors). Beamer–Asanović–Patterson-style "direction-optimizing BFS" | same asymptotic bound, but *edges examined per claim* drops on graphs with dense frontiers |
+
+Why they are **not** just six implementations of one algorithm:
+
+- B1 vs B4 differ by **graph direction** and answer opposite questions (F1-style view vs F3).
+- B2 changes **initialization** (multiple roots — Kahn's compile-wave batching).
+- B3 changes the **search strategy** (two frontiers with mid-meeting, not one).
+- B5 changes the **termination condition** (frozen depth budget), not just view.
+- B6 changes the **frontier execution discipline** (push vs pull switching) and gains
+  only in a specific regime — this is exactly what benchmarking demonstrates.
+
+Each variant is benchmarked **only against variants/alternatives answering the
+same question** (fair protocol in §7). Equivalences (e.g., B5 with depth = ∞
+must match B1's vertex set; B4 with one changed file must match B2 on that file)
+are asserted in tests so comparisons stay honest.
+
+---
+
+## 6. Benchmarking design (instructor addendum)
+
+- **Timer:** `std::chrono::steady_clock` (monotonic — immune to wall-clock changes).
+- **Graph material for benchmarks:** synthesized with a seeded generator so every
+  size/shape is reproducible and fair across variants:
+  - small→large vertex counts (e.g., 50 → 2000),
+  - **sparse** (few edges per file — typical real projects) vs **dense** (many edges),
+  - structural shapes: layered DAG (realistic include trees), cycle-rich clusters
+    (exercise B4/B2 leftovers), uniform random.
+  Real scanned fixtures are benchmarked too (realism cross-check).
+- **Metrics per run:** elapsed time (µs), vertices visited, edges examined,
+  maximum queue/frontier size reached. These are computed during the traversal,
+  not derived afterwards, so they are unit-testable.
+- **Methodology:** ≥10 measured trials per (algorithm × graph) after a warm-up,
+  drop best/worst leftover outlier handling, report mean/stdev/min/max; rotate
+  algorithm execution order between trials to spread cache effects.
+- **Output:** CSV (one file, documented schema: `algo, graph, V, E, trial,
+  time_us, visited, edges_examined, max_frontier`).
+- **Honesty rule:** results only from actual runs; the report never quotes
+  numbers that were not produced by the committed benchmark code. Environment
+  (machine, build type, flags) recorded alongside.
+- **Noise control:** release build with optimization ON; single-threaded only
+  (threading is out of scope anywhere in the project — see decision list); same
+  graph object for algorithms being compared; nothing else running concurrently
+  where practicable.
+
+---
+
+## 7. Planned folder structure (no code yet)
+
+```
+dsproject/
+├── AGENTS.md ARCHITECTURE.md DEVELOPMENT_PLAN.md TESTING_STRATEGY.md TASK_LOG.md
+├── docs/                       # synopsis DOCX (original file, unchanged)
+├── CMakeLists.txt              # or Makefile — decided in Phase 0
+├── src/
+│   ├── main.cpp                # menu bootstrap
+│   ├── app/                    # menu, session, output formatting, report saving
+│   ├── io/                     # project scanning, include parsing, resolution, Trie population
+│   ├── ds/                     # pure custom structures (testable in isolation)
+│   ├── graph/                  # model + algorithms (BFS variants, DFS/SCC, topo, chains)
+│   └── benchmark/              # generator, runner, timer, CSV
+├── tests/
+│   ├── test_framework.h        # tiny assert harness (no external deps)
+│   ├── ds_tests.cpp graph_tests.cpp io_tests.cpp analysis_tests.cpp
+│   └── fixtures/sample_project/ # ~10 files incl. cycles, unresolved include, dup basename
+└── results/                    # CSV outputs (git-ignored; never commit invented numbers)
+```
+
+---
+
+## 8. Key technical decisions (and their rationale)
+
+| Decision | Rationale |
+|----------|-----------|
+| Integer node ids; strings only via Hash Table lookup | traversals touch numbers, not filenames — simpler DS and faster algorithms |
+| Keep **forward** and **reverse** adjacency lists | F3 (impact), B3 (bidirectional meeting frontier), B4, and in-degree counting for F6 all need reverse edges; building both once at scan time is cheap |
+| DFS implemented **recursively** (recursion-topic demo); **Stack** used for path/cycle reconstruction | approved 2026-11-07: recursion is demonstrated explicitly as the synopsis requires; the recurrence guard caps depth and degrades gracefully; the custom Stack is load-bearing for printing a path/cycle in edge order. No STL container replaces any required structure |
+| Kahn's algorithm (B2 multi-source) for F4 | standard, uses our Queue, gives topological ordering with a clean cycle-report leftover |
+| "Deepest chain" policy **(approved 2026-11-07)** | compute the longest dependency chain when the graph is a **DAG**. If cycles exist → **report that the longest dependency chain is undefined for the current graph** (list cycle groups; do NOT present SCC condensation as a real file-level chain) |
+| Include resolution order **(approved 2026-11-07)** | (1) path relative to the including file, (2) path relative to project root; else **unresolved** (reported, edge-less). Limitations vs. compilers' `-I` systems are documented (§2.5) |
+| File identity = **project-relative path** (approved 2026-11-07) | **Duplicate basenames remain separate graph nodes**; Trie search returns every basename match with its path |
+| **Angle-bracket includes ignored** (`<...>` = system headers) | approved: they are external, not project dependencies |
+| Conditional-compilation directives not evaluated | approved: `#include` inside `//`/`/* */` (single-line block) is ignored; `#ifdef` branches are recorded regardless of condition — documented limitation (§2.5) |
+| Core scope locked **(approved 2026-11-07)** | the 8 synopsis features + 8 required data structures are the scope; the addendum (6 BFS + benchmark) applies to algorithm depth only; no silent feature additions — new ideas go to TASK_LOG "Proposals" |
+| Single binary + unit-test binary, **CMake** (installed via Homebrew) | smallest tooling footprint; a plain `g++` command remains documented as fallback |
+| No threading, no design patterns for pattern's sake | benchmark fairness, code simplicity, semester scope |
+
+---
+
+## 9. Decisions approved (locked 2026-11-07) and remaining confirmations
+
+**Approved & locked** (details in §8):
+1. Deepest dependency chain: longest chain **only for a DAG**; if cycles exist the
+   result is reported **undefined** (cycle groups listed; never an SCC-condensed
+   file-level chain).
+2. DFS is implemented **recursively**; the custom **Stack** is used meaningfully
+   (path/cycle reconstruction); no STL replacement of required structures.
+3. Include resolution: includer's directory → project root; `<...>` ignored;
+   conditional directives not evaluated — limitations documented (§2.5).
+4. Files identified by **project-relative path**; duplicate basenames stay
+   separate nodes.
+5. The synopsis is a **DOCX**, preserved unchanged at `docs/Project_Synopsis_
+   Codebase_Dependency_Analyzer.docx` (folder renamed from `docs ` to `docs/`).
+6. Scope locked to the 8 synopsis features + 8 data structures (+ instructor
+   addendum); ideas go to TASK_LOG "Proposals" before any addendum becomes a feature.
+
+**Remaining confirmations (not implementation blockers):**
+1. **B1–B6 remain provisional.** They implement the instructor's "six meaningful
+   BFS variations/applications" addendum; if the instructor's exact list differs,
+   the menu labels and benchmark naming must be adjusted (before Phase 5 sign-off).
+   We do **not** claim these six are the teacher's mandated exact algorithms.
+2. Benchmark presentation format for viva (CSV schema details / slides) — decided
+   at demo prep time.
+3. Lab-machine C++17 support for `std::filesystem` — assumed; verify at first
+   in-lab run.
+
+---
+
+## 10. What is deliberately NOT designed in this document
+
+Class Catalogue (class names, member functions, signatures), ownership diagrams,
+memory-model prose, precise CSV schemas, per-module headers. Those follow **after
+this document is approved** (next planning step), so that implementation never
+pre-empts a design conversation.
