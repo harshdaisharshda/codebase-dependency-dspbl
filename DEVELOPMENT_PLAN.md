@@ -38,7 +38,7 @@ Exit criteria — all met (2026-11-07):
 
 ---
 
-## Phase 1 — Custom data structures   *(4–5 sessions) — IN PROGRESS (5/6 done)*
+## Phase 1 — Custom data structures   *(4–5 sessions) — IN PROGRESS (6/6 items done; phase close-out pending)*
 
 Build order follows dependency: objects needed by later phases come earlier.
 
@@ -49,7 +49,7 @@ Build order follows dependency: objects needed by later phases come earlier.
 | 1.3 | `Queue` (template) | **DONE 2026-11-07.** Thin facade over the custom `LinkedList` (per team design decision — no ring buffer this version): `enqueue`=O(1) tail append, `dequeue`=O(1) popFront, `front`/`size`/`isEmpty` O(1), `clear` O(n); underflow = assert per project policy; FIFO, empty/single/multi, front-no-remove, drain-reuse, clear-reuse, move-then-reuse, **interleaved ops**, 10k stress — 10 tests green in Debug (ASan/UBSan) & Release |
 | 1.4 | `HashTable` (string→int, separate chaining, Linked List buckets) | **DONE 2026-11-07 (upgraded to template `HashTable<V>` per team instruction).** FNV-1a 64-bit (public `hashFor` for deterministic collision tests), separate chaining on `ds::LinkedList`, buckets in new `ds::DynArray` primitive (no STL), integer-exact rehash at `count*4 > buckets*3` (doubling), duplicate insert rejected w/o overwrite, `find`→`const V*` distinguishes absent vs stored zero, moved-from tables reusable. 18 tests incl. collision chains + 10k stress → **48 tests, 20 293 checks green** Debug (ASan/UBSan) + Release. Fixes found by tests: value-init in DynArray ctor; hand-written HashTable move (defaulted move copied `count_`, breaking moved-from invariant) |
 | 1.5 | `Trie` | **DONE 2026-11-07.** Keyed by **basename** (so same-basename files in different dirs share one terminal and BOTH ids return for prefix "api" — user's requirement). Children = own `LinkedList<{char, Node*}>` (documented: no STL container, and a 128-slot array ≈1 KB/node was rejected for memory). Terminal ids deduplicated at insert; `searchPrefix` dedups across names; byte-exact case sensitivity; remove(name,id) drops one id w/o node pruning (clear() on re-scan); moved-from reusable. 13 tests incl. deep chains + 10k shared-prefix stress → **61 tests, 30 375 checks green** Debug (ASan/UBSan) + Release |
-| 1.6 | `MaxHeap` (score,id) | heapify build from a list in O(n); extractMax k×; **ties** broken deterministically (lexicographic name second key, applied by caller or stored in the payload) |
+| 1.6 | `MaxHeap` (score,id) | **DONE 2026-11-07.** Array-backed via `ds::DynArray<Entry>` + separate logical `count_`; ordering: higher score first, ties → smaller fileId (matches sorted-scan id assignment ⇒ deterministic tie-break at graph level). **Bottom-up heapify `buildFrom` included** — justified: all V in-degrees known at once in F6, O(n) vs O(n·log n). Hand-written move (defaulted move would copy `count_` — known Phase 1.4 trap). 10 tests incl. heap-invariant walk, buildFrom≡insert equivalence (n=4000), 10k stress → **71 tests, 48 441 checks green** Debug (ASan/UBSan) + Release |
 | 1.7 | Small dynamic numeric arrays (`IntArray`, `BoolArray`) | used for dist/parent/visited/color tables; no `std::vector` inside DS/algorithm internals |
 
 Unit tests (per structure, plus cross-structure polymorphic use in graph in Phase 2):

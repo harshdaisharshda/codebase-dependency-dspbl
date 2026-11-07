@@ -5,6 +5,7 @@
 #include "ds/dyn_array.h"
 #include "ds/hash_table.h"
 #include "ds/linked_list.h"
+#include "ds/max_heap.h"
 #include "ds/queue.h"
 #include "ds/stack.h"
 #include "ds/trie.h"
@@ -1020,4 +1021,218 @@ TEST(trie, stress_shared_prefixes_10k_names)
     trie.clear();
     CHECK_EQ(trie.size(), std::size_t{0});
     CHECK_EQ(trie.searchPrefix("util_string_").size(), std::size_t{0});
+}
+
+// ===========================================================================
+// MAX HEAP tests (TESTING_STRATEGY.md §3.6 — heap invariant walked from the
+// raw array after series of ops, deterministic tie-break, buildFrom ≡ insert
+// equivalence, clear/move reuse, 10k stress)
+// ===========================================================================
+
+using Entry = ds::MaxHeap::Entry;
+
+static bool heapInvariantHolds(const ds::MaxHeap& heap)
+{
+    const std::size_t n = heap.size();
+    for (std::size_t i = 1; i < n; ++i)
+    {
+        // parent must dominate child under the documented ordering
+        if (ds::MaxHeap::higherPriority(heap.rawEntryAt(i), heap.rawEntryAt((i - 1) / 2)))
+            return false;
+    }
+    return true;
+}
+
+TEST(max_heap, empty_state)
+{
+    ds::MaxHeap heap;
+    CHECK(heap.isEmpty());
+    CHECK_EQ(heap.size(), std::size_t{0});
+    heap.clear(); // idempotent on empty
+    CHECK(heap.isEmpty());
+    // NOTE: peekMax()/extractMax() on empty go through assert() (project
+    // policy — cannot be observed without killing the test process).
+}
+
+TEST(max_heap, single_entry_peek_then_extract)
+{
+    ds::MaxHeap heap;
+    heap.insert(Entry{7, 1});
+    CHECK(!heap.isEmpty());
+    CHECK_EQ(heap.size(), std::size_t{1});
+
+    const Entry& peeked = heap.peekMax();
+    CHECK_EQ(peeked.score, 7);
+    CHECK_EQ(peeked.fileId, 1);
+    CHECK_EQ(heap.size(), std::size_t{1}); // peek did not extract
+
+    const Entry extracted = heap.extractMax();
+    CHECK_EQ(extracted.score, 7);
+    CHECK_EQ(extracted.fileId, 1);
+    CHECK(heap.isEmpty());
+}
+
+TEST(max_heap, multiple_insertions_report_maximum)
+{
+    ds::MaxHeap heap;
+    heap.insert(Entry{7, 1});
+    heap.insert(Entry{42, 2});
+    heap.insert(Entry{13, 3});
+    CHECK_EQ(heap.size(), std::size_t{3});
+    CHECK_EQ(heap.peekMax().score, 42);
+    CHECK_EQ(heap.peekMax().fileId, 2);
+    CHECK(heapInvariantHolds(heap));
+}
+
+TEST(max_heap, extraction_is_descending_order)
+{
+    ds::MaxHeap heap;
+    heap.insert(Entry{7, 1});
+    heap.insert(Entry{42, 2});
+    heap.insert(Entry{13, 3});
+    heap.insert(Entry{99, 4});
+    heap.insert(Entry{5, 5});
+
+    CHECK_EQ(heap.extractMax().score, 99);
+    CHECK_EQ(heap.extractMax().score, 42);
+    CHECK_EQ(heap.extractMax().score, 13);
+    CHECK_EQ(heap.extractMax().score, 7);
+    CHECK_EQ(heap.extractMax().score, 5);
+    CHECK(heap.isEmpty());
+
+    heap.insert(Entry{1, 9}); // reusable after the drain
+    CHECK_EQ(heap.extractMax().score, 1);
+}
+
+TEST(max_heap, equal_scores_tie_broken_by_smaller_file_id)
+{
+    ds::MaxHeap heap;
+    // Same score, ids inserted SHUFFLED — extraction must be id-ascending:
+    // 5, 7, 9 anywhere the inputs come (graph assigns ids in sorted order).
+    heap.insert(Entry{5, 9});
+    heap.insert(Entry{5, 5});
+    heap.insert(Entry{5, 7});
+    CHECK_EQ(heap.extractMax().fileId, 5);
+    CHECK_EQ(heap.extractMax().fileId, 7);
+    CHECK_EQ(heap.extractMax().fileId, 9);
+    CHECK(heap.isEmpty());
+
+    // And smaller scoring beats tie? no: score dominates id — sanity check.
+    heap.insert(Entry{6, 9});
+    heap.insert(Entry{5, 5});
+    CHECK_EQ(heap.peekMax().fileId, 9); // score 6 > 5 despite bigger id
+}
+
+TEST(max_heap, invariant_holds_after_series_of_ops)
+{
+    ds::MaxHeap heap;
+    CHECK(heapInvariantHolds(heap)); // empty heap vacuously valid
+    for (int i = 1; i <= 32; ++i)
+        heap.insert(Entry{(i * 37) % 13, i}); // many duplicate scores
+    CHECK(heapInvariantHolds(heap));
+    for (int i = 0; i < 16; ++i)
+    {
+        heap.extractMax();
+        CHECK(heapInvariantHolds(heap)); // after every extraction
+    }
+    for (int i = 100; i < 124; ++i)
+        heap.insert(Entry{i % 4, i});
+    CHECK(heapInvariantHolds(heap));
+}
+
+TEST(max_heap, clear_and_reuse)
+{
+    ds::MaxHeap heap;
+    heap.insert(Entry{3, 1});
+    heap.insert(Entry{4, 2});
+    heap.clear();
+    CHECK(heap.isEmpty());
+    CHECK_EQ(heap.size(), std::size_t{0});
+
+    heap.insert(Entry{9, 3}); // reusable — and resize/grow path re-checks
+    CHECK_EQ(heap.peekMax().fileId, 3);
+
+    // Grow beyond several doublings to exercise ensureCapacity repeatedly.
+    for (int i = 0; i < 200; ++i)
+        heap.insert(Entry{50, i});
+    CHECK_EQ(heap.size(), std::size_t{201}); // 1 reuse insert + 200 loop
+    CHECK(heapInvariantHolds(heap));
+}
+
+TEST(max_heap, move_steals_and_moved_from_is_reusable)
+{
+    ds::MaxHeap source;
+    source.insert(Entry{10, 1});
+    source.insert(Entry{20, 2});
+
+    ds::MaxHeap target(std::move(source));
+    CHECK(source.isEmpty()); // moved-from: empty
+    CHECK_EQ(target.size(), std::size_t{2});
+    CHECK_EQ(target.peekMax().score, 20);
+
+    ds::MaxHeap target2;
+    target2.insert(Entry{1, 99});
+    target2 = std::move(target);
+    CHECK(target.isEmpty()); // assign-source drained
+    CHECK_EQ(target2.size(), std::size_t{2});
+    CHECK_EQ(target2.peekMax().fileId, 2); // stale "1/99" replaced
+
+    source.insert(Entry{3, 7}); // moved-from heap immediately reusable
+    CHECK_EQ(source.extractMax().fileId, 7);
+}
+
+TEST(max_heap, build_from_equivalent_to_repeated_insert)
+{
+    // Deterministic pseudo-random-ish duplicates + tie-breaks at n=4000:
+    // extraction sequences of (a) insert-built and (b) heapify-built MUST be
+    // identical, because with distinct (score,id) pairs the comparator is a
+    // strict total order.
+    ds::DynArray<Entry> entries(4000);
+    for (int i = 0; i < 4000; ++i)
+        entries[i] = Entry{(i * 37) % 88, i}; // heavy duplication of scores
+
+    // (a) incremental inserts
+    ds::MaxHeap byInsert;
+    for (std::size_t i = 0; i < entries.size(); ++i)
+        byInsert.insert(entries[i]);
+    CHECK(heapInvariantHolds(byInsert));
+
+    // (b) O(n) bottom-up heapify
+    ds::MaxHeap byHeapify;
+    byHeapify.buildFrom(entries);
+    CHECK(heapInvariantHolds(byHeapify));
+
+    // identical extraction sequences
+    while (!byHeapify.isEmpty())
+    {
+        CHECK_EQ(byInsert.extractMax().fileId, byHeapify.extractMax().fileId);
+        CHECK_EQ(byInsert.size(), byHeapify.size()); // stay in lockstep
+    }
+    CHECK(byInsert.isEmpty());
+    CHECK(byHeapify.isEmpty());
+}
+
+TEST(max_heap, stress_10k)
+{
+    ds::MaxHeap heap;
+    const int n = 10000;
+    for (int i = 0; i < n; ++i)
+        heap.insert(Entry{(i * 31) % 1000, i}); // only 1000 distinct scores
+    CHECK_EQ(heap.size(), std::size_t{n});
+    CHECK(heapInvariantHolds(heap));
+
+    long long sumScores = 0;
+    int previousScore = 2000000000; // above any input score
+    while (!heap.isEmpty())
+    {
+        const Entry top = heap.extractMax();
+        CHECK(top.score <= previousScore); // non-increasing extraction
+        previousScore = top.score;
+        sumScores += top.score;
+    }
+    // (i*31) % 1000 is a permutation of 0..999 within every block of 1000
+    // indices (gcd(31,1000)==1); n = 10 blocks => 10 * sum(0..999).
+    CHECK_EQ(sumScores, 4995000LL);
+    heap.insert(Entry{1, 1}); // reuse after full drain
+    CHECK_EQ(heap.extractMax().score, 1);
 }
