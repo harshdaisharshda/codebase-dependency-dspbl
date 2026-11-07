@@ -3,6 +3,7 @@
 // following TESTING_STRATEGY.md §3.x. Suite `linked_list` = §3.1 checklist.
 
 #include "ds/linked_list.h"
+#include "ds/stack.h"
 
 #include <string>
 
@@ -196,4 +197,150 @@ TEST(linked_list, stress_10k_appends_iterate_clear)
     CHECK_EQ(list.size(), std::size_t{9999});
     list.clear();
     CHECK_EQ(list.size(), std::size_t{0});
+}
+
+// ===========================================================================
+// STACK tests (TESTING_STRATEGY.md §3.2 — LIFO, underflow-by-assert policy,
+// reuse after drain/clear, move semantics, 10k stress)
+// ===========================================================================
+
+using IntStack = ds::Stack<int>;
+
+TEST(stack, initially_empty)
+{
+    IntStack stack;
+    CHECK(stack.isEmpty());
+    CHECK_EQ(stack.size(), std::size_t{0});
+    stack.clear(); // idempotent on empty (items 1 & 7 partially covered here)
+    CHECK(stack.isEmpty());
+    // NOTE: pop()/top() on empty intentionally go through assert() (frozen
+    // project policy): an assert kills the process, so it cannot be observed
+    // inside the test binary — matching the LinkedList precondition policy.
+}
+
+TEST(stack, push_one_element)
+{
+    IntStack stack;
+    stack.push(42);
+    CHECK(!stack.isEmpty());
+    CHECK_EQ(stack.size(), std::size_t{1});
+    CHECK_EQ(stack.top(), 42);
+}
+
+TEST(stack, push_multiple_grows_size)
+{
+    IntStack stack;
+    stack.push(1);
+    stack.push(2);
+    stack.push(3);
+    CHECK_EQ(stack.size(), std::size_t{3});
+}
+
+TEST(stack, lifo_ordering)
+{
+    IntStack stack;
+    stack.push(1);
+    stack.push(2);
+    stack.push(3);
+    CHECK_EQ(stack.pop(), 3);
+    CHECK_EQ(stack.pop(), 2);
+    CHECK_EQ(stack.pop(), 1);
+    CHECK(stack.isEmpty());
+}
+
+TEST(stack, top_does_not_remove)
+{
+    IntStack stack;
+    stack.push(7);
+    stack.push(9);
+    CHECK_EQ(stack.top(), 9);
+    CHECK_EQ(stack.top(), 9); // unchanged
+    CHECK_EQ(stack.size(), std::size_t{2});
+    CHECK_EQ(stack.pop(), 9);
+    CHECK_EQ(stack.top(), 7); // new top after pop
+}
+
+TEST(stack, pop_until_empty_then_reuse)
+{
+    IntStack stack;
+    for (int i = 0; i < 5; ++i)
+        stack.push(i);
+    for (int i = 4; i >= 0; --i)
+        CHECK_EQ(stack.pop(), i);
+    CHECK(stack.isEmpty());
+
+    stack.push(10); // fully reusable after the drain
+    stack.push(11);
+    CHECK_EQ(stack.size(), std::size_t{2});
+    CHECK_EQ(stack.pop(), 11);
+    CHECK_EQ(stack.pop(), 10);
+    CHECK(stack.isEmpty());
+}
+
+TEST(stack, clear_and_reuse)
+{
+    IntStack stack;
+    stack.push(1);
+    stack.push(2);
+    stack.clear();
+    CHECK(stack.isEmpty());
+    CHECK_EQ(stack.size(), std::size_t{0});
+
+    stack.push(5); // reusable
+    CHECK_EQ(stack.top(), 5);
+    stack.clear();
+    CHECK(stack.isEmpty());
+
+    // Re-pushing after clear must reproduce a correct LIFO order.
+    stack.push(100);
+    stack.push(200);
+    CHECK_EQ(stack.pop(), 200);
+    CHECK_EQ(stack.pop(), 100);
+}
+
+TEST(stack, move_steals_and_source_reusable)
+{
+    IntStack source;
+    source.push(1);
+    source.push(2);
+
+    IntStack target(std::move(source));
+    CHECK(source.isEmpty()); // moved-from: empty and valid
+    CHECK_EQ(target.size(), std::size_t{2});
+    CHECK_EQ(target.pop(), 2);
+
+    IntStack target2;
+    target2.push(50);
+    target2 = std::move(target); // move-assign drops target2's old contents
+    CHECK(target.isEmpty());
+    CHECK_EQ(target2.size(), std::size_t{1});
+    CHECK_EQ(target2.top(), 1);
+
+    CHECK_EQ(target2.pop(), 1);
+    CHECK(target2.isEmpty());
+}
+
+TEST(stack, stress_10k_lifo)
+{
+    IntStack stack;
+    const int n = 10000;
+    for (int i = 0; i < n; ++i)
+        stack.push(i);
+
+    CHECK_EQ(stack.size(), std::size_t{n});
+    CHECK_EQ(stack.top(), n - 1);
+
+    long long sum = 0; // pop everything in reverse order (i == n-1 .. 0)
+    int count = 0;
+    while (!stack.isEmpty())
+    {
+        sum += stack.pop();
+        ++count;
+    }
+    CHECK_EQ(count, n);
+    CHECK_EQ(sum, static_cast<long long>(n) * (n - 1) / 2);
+    CHECK(stack.isEmpty());
+
+    stack.push(-1); // reuse after a 10k drain
+    CHECK_EQ(stack.top(), -1);
 }
