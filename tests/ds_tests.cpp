@@ -2,10 +2,13 @@
 // Unit tests for the custom data structures, one suite per structure,
 // following TESTING_STRATEGY.md §3.x. Suite `linked_list` = §3.1 checklist.
 
+#include "ds/dyn_array.h"
+#include "ds/hash_table.h"
 #include "ds/linked_list.h"
 #include "ds/queue.h"
 #include "ds/stack.h"
 
+#include <cmath>
 #include <string>
 
 #include "test_framework.h"
@@ -514,4 +517,290 @@ TEST(queue, stress_10k_fifo)
 
     queue.enqueue(-1); // reuse after a 10k drain
     CHECK_EQ(queue.front(), -1);
+}
+
+// ===========================================================================
+// DYN ARRAY tests (internal HashTable bucket-array building block — kept
+// small; deeper growth tests arrive with Phase 1.7 usage)
+// ===========================================================================
+
+TEST(dyn_array, default_state_is_empty)
+{
+    ds::DynArray<int> array;
+    CHECK(array.isEmpty());
+    CHECK_EQ(array.size(), std::size_t{0});
+}
+
+TEST(dyn_array, sized_construction_default_values_and_writes)
+{
+    ds::DynArray<int> array(5); // int elements are zero-initialised
+    CHECK(!array.isEmpty());
+    CHECK_EQ(array.size(), std::size_t{5});
+    CHECK_EQ(array.capacity(), std::size_t{5});
+    for (std::size_t i = 0; i < array.size(); ++i)
+        CHECK_EQ(array[i], 0);
+
+    array[0] = 10;
+    array[4] = 14;
+    CHECK_EQ(array[0], 10);
+    CHECK_EQ(array[4], 14);
+}
+
+TEST(dyn_array, move_steals_and_old_storage_is_freed)
+{
+    ds::DynArray<int> array(8);
+    array[7] = 77;
+
+    ds::DynArray<int> target(std::move(array));
+    CHECK(array.isEmpty()); // moved-from: nothing left to index
+    CHECK_EQ(target.size(), std::size_t{8});
+    CHECK_EQ(target[7], 77);
+}
+
+TEST(dyn_array, move_assignment_frees_destination)
+{
+    ds::DynArray<int> destination(4);
+    ds::DynArray<int> source(9);
+    source[8] = 88;
+
+    destination = std::move(source); // destination's old buffer must be freed
+    CHECK(source.isEmpty());
+    CHECK_EQ(destination.size(), std::size_t{9});
+    CHECK_EQ(destination[8], 88);
+}
+
+TEST(dyn_array, used_as_chain_bucket_array_like_hashtable)
+{
+    // Slightly larger than minimal: mimics the real HashTable bucket pattern
+    // (array of LinkedList chains) to exercise move/assign on that shape.
+    ds::DynArray<ds::LinkedList<int>> buckets(4);
+    buckets[1].append(21);
+    buckets[1].append(22);
+    buckets[3].append(43);
+
+    CHECK_EQ(buckets[0].size(), std::size_t{0});
+    CHECK_EQ(buckets[1].size(), std::size_t{2});
+    CHECK_EQ(buckets[3].front(), 43);
+
+    ds::DynArray<ds::LinkedList<int>> target(std::move(buckets));
+    CHECK(buckets.isEmpty());
+    CHECK_EQ(target[1].size(), std::size_t{2});
+}
+
+// ===========================================================================
+// HASH TABLE tests (TESTING_STRATEGY.md §3.4 — collisions, duplicate keys,
+// rehash integrity, absent-vs-zero-value semantics, empty string, 10k stress,
+// clear & move reuse)
+// ===========================================================================
+
+using PathTable = ds::HashTable<int>;
+
+// Deterministic collision finder: two distinct keys landing in the same
+// bucket under `bucketCount` (uses the public hashFor()).
+static std::pair<std::string, std::string> findCollidingKeys(std::size_t bucketCount)
+{
+    const std::size_t probeBucket = ds::HashTable<int>::hashFor("collision_probe_0") % bucketCount;
+    for (int i = 1; i < 2000; ++i)
+    {
+        std::string candidate = "collision_probe_" + std::to_string(i);
+        if (ds::HashTable<int>::hashFor(candidate) % bucketCount == probeBucket)
+            return {"collision_probe_0", candidate};
+    }
+    // No collisions found in 2000 probes would itself be a broken hash.
+    return {"", ""};
+}
+
+TEST(hash_table, empty_state)
+{
+    PathTable table;
+    CHECK(table.isEmpty());
+    CHECK_EQ(table.size(), std::size_t{0});
+    CHECK(table.contains("main.cpp") == false);
+    CHECK(table.find("main.cpp") == nullptr); // absent is distinct from zero (below)
+    CHECK(table.remove("main.cpp") == false);
+    CHECK(table.loadFactor() == 0.0);
+    table.clear(); // idempotent on empty
+    CHECK(table.isEmpty());
+}
+
+TEST(hash_table, insert_lookup_zero_value_and_absent_distinction)
+{
+    PathTable table;
+    CHECK(table.insert("utils.h", 0)); // value IS legitimately zero
+    const int* value = table.find("utils.h");
+    CHECK(value != nullptr);      // present …
+    CHECK_EQ(*value, 0);          // … and holds zero
+    CHECK(table.contains("utils.h"));
+    CHECK_EQ(table.size(), std::size_t{1});
+    CHECK(table.find("nope.cpp") == nullptr); // true absence
+}
+
+TEST(hash_table, duplicate_insertion_rejected_without_overwrite)
+{
+    PathTable table;
+    CHECK(table.insert("api.h", 7));
+    CHECK(table.insert("api.h", 100) == false); // rejected
+    const int* value = table.find("api.h");
+    CHECK(value != nullptr);
+    CHECK_EQ(*value, 7);   // original value intact
+    CHECK_EQ(table.size(), std::size_t{1}); // no phantom entries
+}
+
+TEST(hash_table, multiple_keys_distinct_values)
+{
+    PathTable table;
+    CHECK(table.insert("main.cpp", 1));
+    CHECK(table.insert("api/api.h", 2));
+    CHECK(table.insert("network/api.h", 3)); // duplicate basename, different path
+    CHECK(table.insert("utils/utils.h", 4));
+
+    CHECK_EQ(*table.find("main.cpp"), 1);
+    CHECK_EQ(*table.find("api/api.h"), 2);
+    CHECK_EQ(*table.find("network/api.h"), 3);
+    CHECK_EQ(*table.find("utils/utils.h"), 4);
+    CHECK_EQ(table.size(), std::size_t{4});
+    CHECK_EQ(table.bucketCount(), std::size_t{16});
+    CHECK(table.contains("graph.cpp") == false);
+}
+
+TEST(hash_table, load_factor_tracks_fill_level)
+{
+    PathTable table;
+    table.insert("a", 1);
+    table.insert("b", 2);
+    table.insert("c", 3);
+    const double factor = table.loadFactor(); // 3/16 = 0.1875
+    CHECK(factor > 0.18 && factor < 0.19);
+    table.remove("a");
+    CHECK(table.loadFactor() > 0.12 && table.loadFactor() < 0.13); // 2/16
+}
+
+TEST(hash_table, collision_chain_insert_lookup_remove_middle)
+{
+    const auto [firstKey, secondKey] = findCollidingKeys(16);
+    CHECK(firstKey != secondKey && firstKey != "");
+
+    PathTable table;
+    table.insert(firstKey, 10);
+    table.insert(secondKey, 20);
+    table.insert("independent.h", 30);
+
+    // Both collided keys survived in the SAME bucket with distinct values.
+    CHECK_EQ(*table.find(firstKey), 10);
+    CHECK_EQ(*table.find(secondKey), 20);
+    CHECK_EQ(table.size(), std::size_t{3});
+
+    CHECK(table.remove(firstKey)); // collided-key removal
+    CHECK_EQ(*table.find(secondKey), 20); // sibling unaffected
+    CHECK_EQ(*table.find("independent.h"), 30);
+    CHECK(table.find(firstKey) == nullptr);
+    CHECK_EQ(table.size(), std::size_t{2});
+    CHECK(!table.remove(firstKey)); // already gone
+}
+
+TEST(hash_table, rehash_boundary_is_integer_exact)
+{
+    PathTable table;
+    for (int i = 0; i < 12; ++i) // 12*4 == 48 == 16*3 → boundary NOT exceeded
+        CHECK(table.insert("resize_key_" + std::to_string(i), i));
+    CHECK_EQ(table.bucketCount(), std::size_t{16});
+    CHECK_EQ(table.size(), std::size_t{12});
+
+    CHECK(table.insert("resize_key_12", 12)); // 13*4=52 > 48 → rehash to 32
+    CHECK_EQ(table.bucketCount(), std::size_t{32});
+    CHECK_EQ(table.size(), std::size_t{13});
+
+    // Every pre-resize pair must still be intact.
+    for (int i = 0; i < 12; ++i)
+        CHECK_EQ(*table.find("resize_key_" + std::to_string(i)), i);
+    CHECK_EQ(*table.find("resize_key_12"), 12);
+}
+
+TEST(hash_table, rehash_preserves_all_pairs_through_growth)
+{
+    PathTable table;
+    const int n = 10000;
+    for (int i = 0; i < n; ++i)
+        CHECK(table.insert("big_" + std::to_string(i), i));
+    CHECK_EQ(table.size(), std::size_t{n});
+    CHECK(table.bucketCount() > 16);          // grew several times
+    CHECK(table.loadFactor() <= 0.75);        // threshold respected
+
+    for (int i = 0; i < n; ++i) // every surviving pair reachable after rehashes
+        CHECK_EQ(*table.find("big_" + std::to_string(i)), i);
+
+    CHECK(table.remove("big_0"));
+    CHECK(table.contains("big_1"));
+    CHECK(table.find("big_0") == nullptr);
+    CHECK_EQ(table.size(), std::size_t{n - 1});
+}
+
+TEST(hash_table, empty_string_key_works)
+{
+    PathTable table;
+    CHECK(table.insert("", 99));
+    CHECK(table.contains(""));
+    CHECK_EQ(*table.find(""), 99);
+    CHECK(table.remove(""));
+    CHECK(table.find("") == nullptr);
+    CHECK(table.isEmpty());
+}
+
+TEST(hash_table, remove_missing_key_is_noop)
+{
+    PathTable table;
+    table.insert("x", 1);
+    CHECK(table.remove("missing") == false);
+    CHECK_EQ(table.size(), std::size_t{1});
+}
+
+TEST(hash_table, clear_and_reuse)
+{
+    PathTable table;
+    for (int i = 0; i < 5; ++i)
+        table.insert("k" + std::to_string(i), i);
+    table.clear();
+    CHECK(table.isEmpty());
+    CHECK_EQ(table.size(), std::size_t{0});
+    CHECK(table.contains("k0") == false);
+    CHECK_EQ(table.loadFactor(), 0.0);
+    CHECK_EQ(table.bucketCount(), std::size_t{16}); // capacity kept for reuse
+
+    CHECK(table.insert("fresh", 1));
+    CHECK_EQ(*table.find("fresh"), 1);
+    CHECK_EQ(table.size(), std::size_t{1});
+}
+
+TEST(hash_table, move_steals_and_moved_from_is_reusable)
+{
+    PathTable source;
+    source.insert("a.h", 1);
+    source.insert("b.h", 2);
+
+    PathTable target(std::move(source));
+    CHECK(source.isEmpty()); // moved-from
+    CHECK_EQ(target.size(), std::size_t{2});
+    CHECK_EQ(*target.find("a.h"), 1);
+    CHECK_EQ(*target.find("b.h"), 2);
+
+    PathTable target2;
+    target2.insert("c.h", 3);
+    target2 = std::move(target);
+    CHECK(target.isEmpty()); // source of the assignment drained
+    CHECK_EQ(target2.size(), std::size_t{2}); // stolen pairs arrived
+    CHECK(target2.find("c.h") == nullptr); // old contents replaced
+
+    // Moved-from table must be immediately reusable (bucket restore path).
+    CHECK(source.insert("d.h", 4));
+    CHECK_EQ(*source.find("d.h"), 4);
+    CHECK_EQ(source.size(), std::size_t{1});
+}
+
+TEST(hash_table, works_with_non_integer_values)
+{
+    ds::HashTable<std::string> table;
+    CHECK(table.insert("path/a.cpp", "main translation unit"));
+    CHECK_EQ(*table.find("path/a.cpp"), std::string("main translation unit"));
+    CHECK(table.remove("path/a.cpp"));
+    CHECK(table.find("path/a.cpp") == nullptr);
 }
