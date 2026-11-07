@@ -38,13 +38,13 @@ Exit criteria — all met (2026-11-07):
 
 ---
 
-## Phase 1 — Custom data structures   *(4–5 sessions) — PENDING*
+## Phase 1 — Custom data structures   *(4–5 sessions) — IN PROGRESS (1/6 done)*
 
 Build order follows dependency: objects needed by later phases come earlier.
 
 | # | Structure | Notes / pitfalls to test for |
 |---|-----------|------------------------------|
-| 1.1 | `LinkedList` (template) | O(1) append via tail pointer; iterator; deep copy or deleted copy; empty list edge |
+| 1.1 | `LinkedList` (template) | **DONE 2026-11-07.** O(1) append via tail pointer; forward const iterator; copy deleted / move steals; `removeIf` for hash-bucket unlinking; empty & single-element, pop-drain, 10k stress — 11 tests green in Debug (ASan/UBSan) & Release |
 | 1.2 | `Stack` (template) | push/pop/top; asserts on empty pop — **never UB**; linked nodes |
 | 1.3 | `Queue` (template) | ring buffer; wrap-around correctness; growth doubling; deque-from-empty is a programming error |
 | 1.4 | `HashTable` (string→int, separate chaining, Linked List buckets) | collision handling; rehash at load factor ~0.75; FNV-1a-like hash; remove; contains; empty-string key |

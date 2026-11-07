@@ -35,7 +35,11 @@ add_executable(dep-analyzer
 
 add_executable(unit-tests
     tests/test_main.cpp
+    tests/ds_tests.cpp
 )
+
+target_include_directories(dep-analyzer PRIVATE src)
+target_include_directories(unit-tests PRIVATE src)
 
 set_project_warnings(dep-analyzer)
 set_project_warnings(unit-tests)
