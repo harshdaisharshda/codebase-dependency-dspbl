@@ -1,10 +1,10 @@
 # ARCHITECTURE.md — Codebase Dependency Analyzer
 
-**Status:** v2.2 — Decisions approved by the team (2026-11-07) and locked in §9.
-Phase 0–2 as-built: the DS library (`src/ds/`) and the dependency graph model
-(`src/graph/dependency_graph.h`) are implemented and unit-tested; the detailed
-graph interface therefore lives in that header. Analytics/scanner interfaces
-remain unspecified until Phase 3–4 begins.
+**Status:** v2.3 — Decisions approved by the team (2026-11-07) and locked in §9.
+Phase 0–3 as-built: DS library (`src/ds/`), DependencyGraph model
+(`src/graph/dependency_graph.h`), and scanning/parsing (`src/io/`) are
+implemented and unit-tested; their interfaces live in those headers.
+Analytics interfaces remain unspecified until Phase 4.
 
 > Note: the synopsis is a **Word document**, not the PDF initially referenced
 > (`docs/Project_Synopsis_Codebase_Dependency_Analyzer.docx`). The file is
@@ -236,7 +236,9 @@ dsproject/
 ├── src/
 │   ├── main.cpp                # menu bootstrap
 │   ├── app/                    # menu, session, output formatting, report saving
-│   ├── io/                     # project scanning, include parsing, resolution, Trie population
+│   ├── io/                     # include_parser.h, project_scanner.h (Phase 3,
+│   │                           #   as-built: discovery, parsing, resolution,
+│   │                           #   summary/warnings; Trie population deferred)
 │   ├── ds/                     # pure custom structures (testable in isolation)
 │   ├── graph/                  # dependency_graph.h (model, Phase 2, as-built) +
 │   │                           #   algorithms (BFS variants, DFS/SCC, topo, chains)
@@ -300,6 +302,13 @@ dsproject/
 10. macOS dev-machine limitation: ASan leak detection (LSan) is unsupported
     (`detect_leaks is not supported`); sanitizer runs stay mandatory but
     LSan-based leak checking is impossible locally.
+11. Scanner rulings (Phase 3, 2026-11-07): empty-graph precondition asserted
+    inside `scanProject` (ruling #5); sorted-path node ids (ruling #6);
+    Unresolvable (macro/malformed) ≠ unresolved-quoted (ruling #2); every
+    unresolved directive counts (ruling #3); extension/skip matching exact
+    strings; comment markers inside targets are literal (ruling #1). Trie
+    population deferred until Phase 4/7 (approved deviation); `main.cpp`
+    menu untouched until Phase 7 (approved deviation (b)).
 
 **Remaining confirmations (not implementation blockers):**
 1. **B1–B6 remain provisional.** They implement the instructor's "six meaningful

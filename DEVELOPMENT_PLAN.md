@@ -90,24 +90,43 @@ Exit criteria — ALL MET:
 
 ---
 
-## Phase 3 — Source scanning & `#include` parsing   *(2–3 sessions) — PENDING*
+## Phase 3 — Source scanning & `#include` parsing   *(2–3 sessions) — DONE 2026-11-07*
 
-- [ ] Directory walk with `std::filesystem::recursive_directory_iterator`,
-      extension filtering (`.h .hpp .hh .c .cc .cpp .cxx`), skip-list (`build/`,
-      `.git/`, `tests/fixtures`, ...), sorted deterministic order.
-- [ ] Line parser: `#include "..."` extraction only; strips `//` comments and
-      single-line block comments around include lines; **documents** why `#ifdef` is not evaluated.
-- [ ] Resolution order (per ARCHITECTURE.md §8):
+- [x] Directory walk with `std::filesystem::recursive_directory_iterator`,
+      extension filtering (`.h .hpp .hh .c .cc .cpp .cxx` — lowercase exact,
+      `HEADER.CPP` skipped by design), skip-list (`.git/`, `build/`, `results/`,
+      exact names), **sorted deterministic order** (paths sorted before
+      `addNode`; `skip_permission_denied` + increment-error recovery; warnings
+      never abort the scan — Phase 3 review ruling #4).
+- [x] Line parser (`src/io/include_parser.h`): `#include "..."` extraction only;
+      `//` and multi-line `/* */` comments respected (markers INSIDE quoted
+      targets are literal, ruling #1); **documents** why `#ifdef` is not
+      evaluated; directive must start the line, one directive per line;
+      counted separately: quoted / angle / unresolvable (macro-form or
+      malformed — NOT node-counter increments, ruling #2).
+- [x] Resolution order (per ARCHITECTURE.md §8):
       1. relative to the including file's directory,
       2. relative to the project root,
-      3. otherwise → `unresolvedIncludes` (warn, no edge).
-- [ ] Builds the graph from Phase 2 via HashTable lookups; populates Trie.
-- [ ] Scan summary stats: files scanned, includes found, unresolved count, self-includes.
+      3. otherwise → `addUnresolvedInclude` + `ResolutionIssue` + warning
+      (warn, no edge; repeats each count — ruling #3). Resolution matches
+      scanned nodes only; never invents nodes or edges.
+- [x] Builds the graph from Phase 2 (empty-graph precondition asserted,
+      ruling #5); self-includes = real edges + `selfIncludes`; Trie
+      population deferred until its feature needs it (approved deviation (a)).
+- [x] Scan summary stats: files scanned, quoted/angle/unresolvable include
+      counts, unresolved count, self-includes.
 
-Exit criteria
+Exit criteria — ALL MET:
 - Scanning `tests/fixtures/sample_project` produces the exact graph assumed by
-  algorithm tests (verified output: same vertices/edges/counts); warnings list matches.
-- Non-existent folder → clean fatal error handling (menu re-prompt or exit code path).
+  algorithm tests: explicit **12 nodes / 9 edges**, full edge-list equality
+  (`main→{api/api.h, utils/utils.h}`, `api/api.cpp→api/api.h`,
+  `api/api.h→database/database.h`, `graph.cpp→{graph.h, shared/util.h}`,
+  `utils/utils.h→shared/util.h`, `cycle_a.h↔cycle_b.h`), 1 unresolved
+  (`missing.h`), 1 ignored angle include, 1 ignored commented include, sorted
+  id round-trip, Σin = Σout = 9 mirror verified.
+- Non-existent folder → returns false, graph untouched and unfinalized
+  (clean fatal-error path).
+- 100 tests / 51 973 checks green in Debug (ASan/UBSan) + Release, 0 warnings.
 
 ---
 
