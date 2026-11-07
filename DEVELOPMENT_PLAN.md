@@ -16,25 +16,25 @@ Effort units below are rough **2–3 hour work sessions** for the 3-person team
 
 ---
 
-## Phase 0 — Project setup   *(1–2 sessions) — PENDING*
+## Phase 0 — Project setup   *(1–2 sessions) — DONE 2026-11-07*
 
 Tasks
-- [ ] Create the folder skeleton exactly as in ARCHITECTURE.md §7.
-- [ ] Decide build tool: CMake vs plain `g++` command. Whichever is chosen, it must:
-      compile `src/main.cpp` + everything into `dep-analyzer`, compile tests into
-      `unit-tests`, support `-Wall -Wextra`, Debug and Release configs,
-      and `-fsanitize=address,undefined` for Debug.
-- [ ] `git init` (the folder is not a repo yet — verified). Add `.gitignore`:
-      build/, results/, .DS_Store. (Housekeeping done earlier: synopsis folder
+- [x] Create the folder skeleton exactly as in ARCHITECTURE.md §7.
+- [x] Build tool chosen: **CMake** (installed via Homebrew; a plain `g++` command
+      remains the documented fallback). Both `dep-analyzer` and `unit-tests` build
+      with `-Wall -Wextra`, Debug (with `-fsanitize=address,undefined`) and Release.
+- [x] `git init` + first commit (`18dca71`). `.gitignore` covers build/, results/,
+      .DS_Store. (Housekeeping done earlier: synopsis folder
       is already renamed `docs /` → `docs/`, file preserved unchanged.)
-- [ ] Write `tests/test_framework.h` (tiny assert harness — no external deps).
-- [ ] Create `tests/fixtures/sample_project/` from ARCHITECTURE.md spec (approx. 10
-      files including one cycle pair, one unresolved include, one duplicate basename).
+- [x] `tests/test_framework.h` written (tiny assert harness — no external deps).
+- [x] `tests/fixtures/sample_project/` created per TESTING_STRATEGY.md §5
+      (12 files: one 2-cycle, one unresolved include, one duplicate basename,
+      one commented include, one angle include).
 
-Exit criteria
-- Building an (almost empty) `dep-analyzer` and running `unit-tests` (with 0 tests)
-  works in Debug and Release from one command.
-- Repo has its first commit; TASK_LOG row exists.
+Exit criteria — all met (2026-11-07):
+- `dep-analyzer` and `unit-tests` build from one command in Debug and Release.
+- `unit-tests` passes (1 self-check test) in both configs; ASan/UBSan clean.
+- Menu tolerates garbage input, exits cleanly on 0 and on EOF (sanitizer clean).
 
 ---
 
