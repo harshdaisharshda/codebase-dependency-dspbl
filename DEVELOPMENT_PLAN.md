@@ -38,7 +38,7 @@ Exit criteria — all met (2026-11-07):
 
 ---
 
-## Phase 1 — Custom data structures   *(4–5 sessions) — IN PROGRESS (6/6 items done; phase close-out pending)*
+## Phase 1 — Custom data structures   *(4–5 sessions) — DONE (close-out approved 2026-11-07)*
 
 Build order follows dependency: objects needed by later phases come earlier.
 
@@ -50,7 +50,7 @@ Build order follows dependency: objects needed by later phases come earlier.
 | 1.4 | `HashTable` (string→int, separate chaining, Linked List buckets) | **DONE 2026-11-07 (upgraded to template `HashTable<V>` per team instruction).** FNV-1a 64-bit (public `hashFor` for deterministic collision tests), separate chaining on `ds::LinkedList`, buckets in new `ds::DynArray` primitive (no STL), integer-exact rehash at `count*4 > buckets*3` (doubling), duplicate insert rejected w/o overwrite, `find`→`const V*` distinguishes absent vs stored zero, moved-from tables reusable. 18 tests incl. collision chains + 10k stress → **48 tests, 20 293 checks green** Debug (ASan/UBSan) + Release. Fixes found by tests: value-init in DynArray ctor; hand-written HashTable move (defaulted move copied `count_`, breaking moved-from invariant) |
 | 1.5 | `Trie` | **DONE 2026-11-07.** Keyed by **basename** (so same-basename files in different dirs share one terminal and BOTH ids return for prefix "api" — user's requirement). Children = own `LinkedList<{char, Node*}>` (documented: no STL container, and a 128-slot array ≈1 KB/node was rejected for memory). Terminal ids deduplicated at insert; `searchPrefix` dedups across names; byte-exact case sensitivity; remove(name,id) drops one id w/o node pruning (clear() on re-scan); moved-from reusable. 13 tests incl. deep chains + 10k shared-prefix stress → **61 tests, 30 375 checks green** Debug (ASan/UBSan) + Release |
 | 1.6 | `MaxHeap` (score,id) | **DONE 2026-11-07.** Array-backed via `ds::DynArray<Entry>` + separate logical `count_`; ordering: higher score first, ties → smaller fileId (matches sorted-scan id assignment ⇒ deterministic tie-break at graph level). **Bottom-up heapify `buildFrom` included** — justified: all V in-degrees known at once in F6, O(n) vs O(n·log n). Hand-written move (defaulted move would copy `count_` — known Phase 1.4 trap). 10 tests incl. heap-invariant walk, buildFrom≡insert equivalence (n=4000), 10k stress → **71 tests, 48 441 checks green** Debug (ASan/UBSan) + Release |
-| 1.7 | Small dynamic numeric arrays (`IntArray`, `BoolArray`) | used for dist/parent/visited/color tables; no `std::vector` inside DS/algorithm internals |
+| 1.7 | Small dynamic numeric arrays (`IntArray`, `BoolArray`) | used for dist/parent/visited/color tables. **Superseded 2026-11-07 (approved ruling A1):** `DynArray` gained generic growth (`emplaceBack`, amortized doubling, move-only-safe) in Phase 2.0 and serves as the single growable-array primitive; Phase 4 algorithm tables will be plain `DynArray<int>`/`DynArray<bool>` — no separate classes needed. |
 
 Unit tests (per structure, plus cross-structure polymorphic use in graph in Phase 2):
 empty, single item, duplicates, resize/rehash/wrap, ties, worst-case collisions,
@@ -61,19 +61,32 @@ Exit criteria
 
 ---
 
-## Phase 2 — Dependency graph model   *(2–3 sessions) — PENDING*
+## Phase 2 — Dependency graph model   *(2–3 sessions) — DONE 2026-11-07*
 
-- [ ] Node table: `path`, `name`, `outDegree`, `inDegree`, `unresolvedIncludes`.
-- [ ] `addNode` (dedup via HashTable → stable id), `addEdge` (no duplicate edges,
-      no self-edges without explicit record), `finalize()` (build **reverse** adjacency
-      lists; fill in-degrees).
-- [ ] Accessors: successors / predecessors / counts / printing.
-- [ ] In-memory graph construction **by hand in tests** (fixture edge lists), used
-      for all algorithm tests in Phases 4–5 before file scanning exists.
+- [x] Node table: `path`, `name`, `unresolvedIncludes` (`graph::DependencyGraph::Node` — out/in degrees are
+      **derived** from the adjacency list sizes instead of stored twice: one source of truth).
+- [x] `addNode` (dedup via HashTable → stable id 0..V-1, never renumbered),
+      `addEdge` (no duplicate edges; **self-edges recorded** per approved ruling B1
+      — a self-include is a real length-1 cycle; out-of-range ids rejected without
+      mutation, report-and-skip), `finalize()` (reverse adjacency in O(V+E); idempotent;
+      structural mutation invalidates the finalized state, no-ops do not).
+- [x] Accessors: `successors`/`predecessors` (predecessors + `inDegree` assert
+      `isFinalized()`), `outDegree`, `node`, `findId`, `edgeCount`, `nodeCount`,
+      `isFinalized`, `clear` (full reset — ids restart by design for re-scan).
+- [x] In-memory graph construction **by hand in tests** (`tests/graph_tests.cpp`,
+      added to the `unit-tests` target) — no filesystem involvement.
+- [x] Support change (approved ruling A1): `ds::DynArray` gained `emplaceBack`
+      with amortized-doubling, move-only-safe growth (see TASK_LOG Phase 2.0);
+      DEVELOPMENT_PLAN item 1.7 thereby satisfied by the generalized primitive.
 
-Exit criteria
-- Known 7-node hand-authored graph round-trips exactly (counts, degrees, ids).
-- Duplicate/node/self edges behave per spec; counts verified.
+Exit criteria — ALL MET:
+- Known 7-node hand-authored graph (chain + diamond + disconnected node)
+  round-trips exactly: ids, both degrees per node, Σin = Σout = E, and every
+  edge mirrored in the reverse lists, in insertion order.
+- Duplicate / out-of-range / self edges behave per spec; counts verified.
+- 2000-node / 5000-edge stress: counter == accepted edges, mirror invariant
+  holds edge-by-edge (a sanity check, explicitly not a benchmark).
+- 86 tests / 51 820 checks green in Debug (ASan/UBSan) + Release, 0 warnings.
 
 ---
 

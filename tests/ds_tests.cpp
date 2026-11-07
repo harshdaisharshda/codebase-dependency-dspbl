@@ -589,6 +589,96 @@ TEST(dyn_array, used_as_chain_bucket_array_like_hashtable)
     CHECK_EQ(target[1].size(), std::size_t{2});
 }
 
+// --- Phase 2 additions: emplaceBack growth (approved decision A1) ------------
+
+TEST(dyn_array, emplace_back_growth_preserves_elements)
+{
+    ds::DynArray<int> array;
+    for (int i = 0; i < 100; ++i)
+        array.emplaceBack(i * 10);
+
+    CHECK_EQ(array.size(), std::size_t{100});
+    CHECK(array.capacity() >= array.size());
+    for (std::size_t i = 0; i < array.size(); ++i)
+        CHECK_EQ(array[i], static_cast<int>(i) * 10); // survived every realloc
+}
+
+TEST(dyn_array, emplace_back_grows_from_sized_start)
+{
+    // Growth path starting from the fixed-count constructor (capacity fully
+    // used, then one more append must reallocate and keep the prefix intact).
+    ds::DynArray<int> array(3);
+    array[0] = 7;
+    array[1] = 8;
+    array[2] = 9;
+
+    array.emplaceBack(10);
+    CHECK_EQ(array.size(), std::size_t{4});
+    CHECK_EQ(array[0], 7);
+    CHECK_EQ(array[1], 8);
+    CHECK_EQ(array[2], 9);
+    CHECK_EQ(array[3], 10);
+}
+
+TEST(dyn_array, emplace_back_accepts_move_only_elements)
+{
+    // LinkedList deletes its copy constructor: growth must MOVE elements, and
+    // emplaceBack itself must move the newly built value into the slot.
+    ds::DynArray<ds::LinkedList<int>> lists;
+    lists.emplaceBack(); // default-constructed empty list
+    lists[0].append(1);
+    lists.emplaceBack(std::move(lists[0])); // move an existing element in
+
+    CHECK_EQ(lists.size(), std::size_t{2});
+    CHECK_EQ(lists[0].size(), std::size_t{0}); // it was moved out on purpose
+    CHECK_EQ(lists[1].front(), 1);
+    CHECK_EQ(lists[1].size(), std::size_t{1});
+}
+
+TEST(dyn_array, emplace_back_repeated_growth_move_only_stress)
+{
+    // Many doublings (16>32>64>128>256): every reallocation must MOVE each
+    // list's nodes, never copy them, and never lose a node (leak check is the
+    // sanitizer's job; this asserts the observable content).
+    // Pattern: even steps append a fresh list (holds i), odd steps move the
+    // freshly appended element into one more slot — so every appended element
+    // is moved at least once and the array is exercised while it reallocates.
+    ds::DynArray<ds::LinkedList<int>> lists;
+    for (int i = 0; i < 300; ++i)
+    {
+        if (i % 2 == 0)
+        {
+            ds::LinkedList<int>& fresh = lists.emplaceBack();
+            fresh.append(i); // no DynArray growth between this and the append
+        }
+        else
+        {
+            ds::LinkedList<int> previous(std::move(lists[lists.size() - 1]));
+            lists.emplaceBack(std::move(previous)); // safe even if it grows:
+                                                    // the value is built before
+                                                    // grow() runs
+        }
+    }
+    CHECK_EQ(lists.size(), std::size_t{300});
+    for (std::size_t i = 0; i < lists.size(); i += 2)
+        CHECK(lists[i].isEmpty()); // even steps: elements moved out at odd steps
+    for (std::size_t i = 1; i < lists.size(); i += 2)
+    {
+        CHECK_EQ(lists[i].size(), std::size_t{1});
+        CHECK_EQ(lists[i].front(), static_cast<int>(i) - 1);
+    }
+}
+
+TEST(dyn_array, emplace_back_returns_latest_reference)
+{
+    ds::DynArray<std::string> strings;
+    strings.emplaceBack("first");
+    CHECK_EQ(strings[0], "first");
+    std::string& last = strings.emplaceBack("second");
+    last += "!";
+    CHECK_EQ(strings[1], "second!");
+}
+
 // ===========================================================================
 // HASH TABLE tests (TESTING_STRATEGY.md §3.4 — collisions, duplicate keys,
 // rehash integrity, absent-vs-zero-value semantics, empty string, 10k stress,

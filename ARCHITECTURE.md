@@ -1,8 +1,10 @@
 # ARCHITECTURE.md — Codebase Dependency Analyzer
 
-**Status:** v2.1 — Decisions approved by the team (2026-11-07) and locked in §9.
-No application code exists yet; detailed class interfaces are deliberately
-**deferred** until implementation begins (Phase 1 planning next).
+**Status:** v2.2 — Decisions approved by the team (2026-11-07) and locked in §9.
+Phase 0–2 as-built: the DS library (`src/ds/`) and the dependency graph model
+(`src/graph/dependency_graph.h`) are implemented and unit-tested; the detailed
+graph interface therefore lives in that header. Analytics/scanner interfaces
+remain unspecified until Phase 3–4 begins.
 
 > Note: the synopsis is a **Word document**, not the PDF initially referenced
 > (`docs/Project_Synopsis_Codebase_Dependency_Analyzer.docx`). The file is
@@ -236,7 +238,8 @@ dsproject/
 │   ├── app/                    # menu, session, output formatting, report saving
 │   ├── io/                     # project scanning, include parsing, resolution, Trie population
 │   ├── ds/                     # pure custom structures (testable in isolation)
-│   ├── graph/                  # model + algorithms (BFS variants, DFS/SCC, topo, chains)
+│   ├── graph/                  # dependency_graph.h (model, Phase 2, as-built) +
+│   │                           #   algorithms (BFS variants, DFS/SCC, topo, chains)
 │   └── benchmark/              # generator, runner, timer, CSV
 ├── tests/
 │   ├── test_framework.h        # tiny assert harness (no external deps)
@@ -282,6 +285,21 @@ dsproject/
    Codebase_Dependency_Analyzer.docx` (folder renamed from `docs ` to `docs/`).
 6. Scope locked to the 8 synopsis features + 8 data structures (+ instructor
    addendum); ideas go to TASK_LOG "Proposals" before any addendum becomes a feature.
+
+**Phase 2 rulings (approved 2026-11-07, implemented in `dependency_graph.h`):**
+7. `addEdge(a, a)` **records** the self-edge as a real graph edge (ruling B1):
+   a self-include is a length-1 dependency cycle that cycle detection (F2) and
+   topological ordering (F4) must see; parse-level counts in Phase 3 stay
+   separate from edge semantics. Synopsis never specifies self-edge handling —
+   this is the documented team choice.
+8. `DynArray` gained `emplaceBack` growth (ruling A1, satisfying plan item
+   1.7): one generic growable array serves the node table and future algorithm
+   tables; no separate `IntArray`/`BoolArray` classes.
+9. Out/in degrees are **derived** from adjacency list sizes rather than stored
+   as separate fields (single source of truth — nothing to drift).
+10. macOS dev-machine limitation: ASan leak detection (LSan) is unsupported
+    (`detect_leaks is not supported`); sanitizer runs stay mandatory but
+    LSan-based leak checking is impossible locally.
 
 **Remaining confirmations (not implementation blockers):**
 1. **B1–B6 remain provisional.** They implement the instructor's "six meaningful
