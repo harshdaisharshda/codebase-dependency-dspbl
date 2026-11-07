@@ -38,14 +38,14 @@ Exit criteria — all met (2026-11-07):
 
 ---
 
-## Phase 1 — Custom data structures   *(4–5 sessions) — IN PROGRESS (1/6 done)*
+## Phase 1 — Custom data structures   *(4–5 sessions) — IN PROGRESS (2/6 done)*
 
 Build order follows dependency: objects needed by later phases come earlier.
 
 | # | Structure | Notes / pitfalls to test for |
 |---|-----------|------------------------------|
 | 1.1 | `LinkedList` (template) | **DONE 2026-11-07.** O(1) append via tail pointer; forward const iterator; copy deleted / move steals; `removeIf` for hash-bucket unlinking; empty & single-element, pop-drain, 10k stress — 11 tests green in Debug (ASan/UBSan) & Release |
-| 1.2 | `Stack` (template) | push/pop/top; asserts on empty pop — **never UB**; linked nodes |
+| 1.2 | `Stack` (template) | **DONE 2026-11-07.** Thin facade over the custom `LinkedList` (top == list head; zero new/delete logic duplicated): all ops O(1); underflow = assert per project policy; empty/single/multi, LIFO, top-no-remove, drain-reuse, clear-reuse, move-then-reuse, 10k stress — 9 tests green in Debug (ASan/UBSan) & Release |
 | 1.3 | `Queue` (template) | ring buffer; wrap-around correctness; growth doubling; deque-from-empty is a programming error |
 | 1.4 | `HashTable` (string→int, separate chaining, Linked List buckets) | collision handling; rehash at load factor ~0.75; FNV-1a-like hash; remove; contains; empty-string key |
 | 1.5 | `Trie` | insert; exact-match; prefix search returning all ids; multiple files sharing a basename; empty prefix behavior (document + guard) |
