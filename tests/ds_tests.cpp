@@ -7,6 +7,7 @@
 #include "ds/linked_list.h"
 #include "ds/queue.h"
 #include "ds/stack.h"
+#include "ds/trie.h"
 
 #include <cmath>
 #include <string>
@@ -803,4 +804,220 @@ TEST(hash_table, works_with_non_integer_values)
     CHECK_EQ(*table.find("path/a.cpp"), std::string("main translation unit"));
     CHECK(table.remove("path/a.cpp"));
     CHECK(table.find("path/a.cpp") == nullptr);
+}
+
+// ===========================================================================
+// TRIE tests (TESTING_STRATEGY.md §3.5 — prefix search, shared prefixes,
+// duplicate basenames sharing one terminal, dedup, case sensitivity, deep
+// chains, clear & move reuse). Keys are BASENAMES; ids are graph node ids.
+// ===========================================================================
+
+// Helper: does the result list contain exactly the given ids?
+static bool containsExactly(const ds::LinkedList<int>& list, const std::initializer_list<int>& expectedIds)
+{
+    if (list.size() != expectedIds.size())
+        return false;
+    for (int id : expectedIds)
+        if (!list.contains(id))
+            return false;
+    return true;
+}
+
+TEST(trie, empty_state)
+{
+    ds::Trie trie;
+    CHECK_EQ(trie.size(), std::size_t{0});
+    CHECK(trie.containsExact("api.h") == false);
+    CHECK_EQ(trie.searchPrefix("api").size(), std::size_t{0});
+    CHECK_EQ(trie.searchPrefix("").size(), std::size_t{0}); // "" = whole trie
+    trie.clear(); // idempotent on empty
+    CHECK_EQ(trie.size(), std::size_t{0});
+}
+
+TEST(trie, single_insertion_exact_and_prefix)
+{
+    ds::Trie trie;
+    CHECK(trie.insert("api.h", 1));
+    CHECK_EQ(trie.size(), std::size_t{1});
+    CHECK(trie.containsExact("api.h"));
+    CHECK(containsExactly(trie.searchPrefix("api"), {1}));
+    CHECK(containsExactly(trie.searchPrefix("api.h"), {1}));
+    CHECK(trie.containsExact("api") == false); // prefix is not an exact name
+    CHECK(trie.containsExact("api.hextra") == false);
+}
+
+TEST(trie, multiple_names_sharing_prefixes)
+{
+    ds::Trie trie;
+    trie.insert("api.h", 1);
+    trie.insert("api.cpp", 2);
+    trie.insert("application.cpp", 3);
+
+    CHECK(trie.containsExact("api.h"));
+    CHECK(trie.containsExact("api.cpp"));
+    CHECK(trie.containsExact("application.cpp"));
+
+    CHECK(containsExactly(trie.searchPrefix("api"), {1, 2}));
+    CHECK(containsExactly(trie.searchPrefix("app"), {3}));
+    CHECK(containsExactly(trie.searchPrefix("a"), {1, 2, 3}));
+    CHECK_EQ(trie.searchPrefix("b").size(), std::size_t{0}); // no crash, empty list
+    CHECK_EQ(trie.size(), std::size_t{3});
+}
+
+TEST(trie, duplicate_basename_multiple_ids_share_terminal)
+{
+    // The synopsis use-case: network/api.h (id 5) and database/api.h (id 9)
+    // are separate graph nodes whose BASENAME is identical — both must be
+    // returned for prefix "api".
+    ds::Trie trie;
+    CHECK(trie.insert("api.h", 5));
+    CHECK(trie.insert("api.h", 9)); // same basename, different graph node
+    CHECK_EQ(trie.size(), std::size_t{2}); // two (name, id) pairs
+    CHECK(trie.containsExact("api.h"));
+    CHECK(containsExactly(trie.searchPrefix("api"), {5, 9}));
+    CHECK(containsExactly(trie.searchPrefix("api.h"), {5, 9}));
+}
+
+TEST(trie, duplicate_insertion_of_same_pair_rejected)
+{
+    ds::Trie trie;
+    CHECK(trie.insert("api.h", 1));
+    CHECK(trie.insert("api.h", 1) == false); // same pair again
+    CHECK_EQ(trie.size(), std::size_t{1});
+    CHECK(containsExactly(trie.searchPrefix("api"), {1}));
+    CHECK_EQ(trie.searchPrefix("api").size(), std::size_t{1}); // no id stored twice
+}
+
+TEST(trie, search_results_deduplicated_across_names)
+{
+    // Same fileId legitimately stored under two different names.
+    ds::Trie trie;
+    trie.insert("api.h", 1);
+    trie.insert("api_helper.h", 1);
+
+    // Prefix "api" walks BOTH terminals; the id must appear exactly once.
+    CHECK(containsExactly(trie.searchPrefix("api"), {1}));
+    CHECK_EQ(trie.searchPrefix("api").size(), std::size_t{1});
+    CHECK_EQ(trie.searchPrefix("api_hel").size(), std::size_t{1});
+    CHECK_EQ(trie.size(), std::size_t{2}); // still two stored pairs
+}
+
+TEST(trie, missing_prefix_returns_empty_not_garbage)
+{
+    ds::Trie trie;
+    trie.insert("utils.h", 7);
+    ds::LinkedList<int> emptyResult = trie.searchPrefix("zzz");
+    CHECK_EQ(emptyResult.size(), std::size_t{0});
+    CHECK(trie.containsExact("zzz") == false);
+    CHECK(trie.remove("zzz", 7) == false); // unknown name -> false
+}
+
+TEST(trie, empty_prefix_matches_everything)
+{
+    ds::Trie trie;
+    trie.insert("main.cpp", 1);
+    trie.insert("utils.h", 2);
+    CHECK(containsExactly(trie.searchPrefix(""), {1, 2}));
+}
+
+TEST(trie, deep_prefix_chain)
+{
+    ds::Trie trie; // increasingly detailed names that extend each other
+    trie.insert("a", 1);
+    trie.insert("au", 2);
+    trie.insert("aut", 3);
+    trie.insert("auto", 4);
+    trie.insert("automated", 5);
+
+    CHECK(trie.containsExact("a"));
+    CHECK(trie.containsExact("automated"));
+    CHECK(trie.containsExact("automatedxxxxx") == false);
+    CHECK(containsExactly(trie.searchPrefix("aut"), {3, 4, 5}));
+    CHECK(containsExactly(trie.searchPrefix("auto"), {4, 5}));
+    CHECK(containsExactly(trie.searchPrefix("automated"), {5}));
+}
+
+TEST(trie, case_sensitivity_is_byte_exact)
+{
+    ds::Trie trie;
+    trie.insert("Utils.h", 1);
+    trie.insert("utils.h", 2);
+
+    CHECK(trie.containsExact("Utils.h"));
+    CHECK(trie.containsExact("utils.h"));
+    CHECK(trie.containsExact("UTILS.H") == false);
+
+    CHECK(containsExactly(trie.searchPrefix("util"), {2}));
+    CHECK(containsExactly(trie.searchPrefix("Util"), {1}));
+    CHECK_EQ(trie.searchPrefix("persist").size(), std::size_t{0});
+}
+
+TEST(trie, remove_and_clear_behaviour)
+{
+    ds::Trie trie;
+    trie.insert("api.h", 5);
+    trie.insert("api.h", 9);
+    CHECK(trie.remove("api.h", 5)); // one id out
+    CHECK_EQ(trie.size(), std::size_t{1});
+    CHECK(containsExactly(trie.searchPrefix("api"), {9}));
+    CHECK(trie.containsExact("api.h")); // still terminal for id 9
+
+    CHECK(trie.remove("api.h", 9)); // last id: no longer a complete name
+    CHECK_EQ(trie.size(), std::size_t{0});
+    CHECK(trie.containsExact("api.h") == false);
+    CHECK_EQ(trie.searchPrefix("api").size(), std::size_t{0}); // subtree unreachable for search
+
+    trie.insert("stdlib.h", 3); // reuse
+    CHECK_EQ(trie.searchPrefix("std").size(), std::size_t{1});
+
+    trie.clear();
+    CHECK_EQ(trie.size(), std::size_t{0});
+    CHECK(trie.containsExact("stdlib.h") == false);
+    CHECK(trie.insert("fresh.h", 1)); // reusable after clear
+    CHECK(containsExactly(trie.searchPrefix("fres"), {1}));
+}
+
+TEST(trie, move_steals_and_moved_from_is_reusable)
+{
+    ds::Trie source;
+    source.insert("api.h", 1);
+    source.insert("utils.h", 2);
+
+    ds::Trie target(std::move(source));
+    CHECK_EQ(source.size(), std::size_t{0});      // moved-from: empty
+    CHECK(source.containsExact("api.h") == false);
+    CHECK(containsExactly(target.searchPrefix("api"), {1}));
+
+    ds::Trie target2;
+    target2.insert("x.h", 9);
+    target2 = std::move(target);
+    CHECK_EQ(target.size(), std::size_t{0});      // drained by assignment
+    CHECK(containsExactly(target2.searchPrefix("api"), {1}));
+    CHECK(target2.containsExact("x.h") == false); // old contents replaced
+
+    CHECK(source.insert("d.h", 4)); // moved-from trie reusable
+    CHECK(containsExactly(source.searchPrefix("d"), {4}));
+}
+
+TEST(trie, stress_shared_prefixes_10k_names)
+{
+    ds::Trie trie;
+    const int n = 10000;
+    for (int i = 0; i < n; ++i)
+        CHECK(trie.insert("util_string_" + std::to_string(i), i));
+    CHECK_EQ(trie.size(), std::size_t{n});
+
+    // Shared long prefix "util_string_" must be stored once, not 10k times.
+    CHECK(trie.searchPrefix("util_string_1").contains(1));   // id 1 among 1,10..19,100..199,1000..1999
+    CHECK(trie.searchPrefix("util_string_2").contains(2));   // similarly for id 2
+
+    ds::LinkedList<int> all = trie.searchPrefix("util_string_");
+    CHECK_EQ(all.size(), std::size_t{n}); // every id found, none duplicated
+
+    for (int i = 0; i < n; i += 2500) // spot checks across the range
+        CHECK(trie.containsExact("util_string_" + std::to_string(i)));
+
+    trie.clear();
+    CHECK_EQ(trie.size(), std::size_t{0});
+    CHECK_EQ(trie.searchPrefix("util_string_").size(), std::size_t{0});
 }
