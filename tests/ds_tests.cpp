@@ -3,6 +3,7 @@
 // following TESTING_STRATEGY.md §3.x. Suite `linked_list` = §3.1 checklist.
 
 #include "ds/linked_list.h"
+#include "ds/queue.h"
 #include "ds/stack.h"
 
 #include <string>
@@ -343,4 +344,174 @@ TEST(stack, stress_10k_lifo)
 
     stack.push(-1); // reuse after a 10k drain
     CHECK_EQ(stack.top(), -1);
+}
+
+// ===========================================================================
+// QUEUE tests (TESTING_STRATEGY.md §3.3 — FIFO discipline, wrap-free linked
+// storage, underflow-by-assert policy, reuse after drain/clear, move
+// semantics, interleaved operations, 10k stress)
+// ===========================================================================
+
+using IntQueue = ds::Queue<int>;
+
+TEST(queue, initially_empty)
+{
+    IntQueue queue;
+    CHECK(queue.isEmpty());
+    CHECK_EQ(queue.size(), std::size_t{0});
+    queue.clear(); // idempotent on empty
+    CHECK(queue.isEmpty());
+    // NOTE: dequeue()/front() on empty go through assert() (frozen project
+    // policy) — same rationale as LinkedList/Stack tests.
+}
+
+TEST(queue, enqueue_one_element)
+{
+    IntQueue queue;
+    queue.enqueue(42);
+    CHECK(!queue.isEmpty());
+    CHECK_EQ(queue.size(), std::size_t{1});
+    CHECK_EQ(queue.front(), 42);
+}
+
+TEST(queue, enqueue_multiple_grows_size)
+{
+    IntQueue queue;
+    queue.enqueue(1);
+    queue.enqueue(2);
+    queue.enqueue(3);
+    CHECK_EQ(queue.size(), std::size_t{3});
+}
+
+TEST(queue, fifo_ordering)
+{
+    IntQueue queue;
+    queue.enqueue(1);
+    queue.enqueue(2);
+    queue.enqueue(3);
+    CHECK_EQ(queue.dequeue(), 1); // oldest first
+    CHECK_EQ(queue.dequeue(), 2);
+    CHECK_EQ(queue.dequeue(), 3);
+    CHECK(queue.isEmpty());
+}
+
+TEST(queue, front_does_not_remove)
+{
+    IntQueue queue;
+    queue.enqueue(7);
+    queue.enqueue(9);
+    CHECK_EQ(queue.front(), 7);
+    CHECK_EQ(queue.front(), 7); // unchanged by inspection
+    CHECK_EQ(queue.size(), std::size_t{2});
+    CHECK_EQ(queue.dequeue(), 7);
+    CHECK_EQ(queue.front(), 9); // next element after dequeue
+}
+
+TEST(queue, dequeue_until_empty_then_reuse)
+{
+    IntQueue queue;
+    for (int i = 0; i < 5; ++i)
+        queue.enqueue(i);
+    for (int i = 0; i < 5; ++i)
+        CHECK_EQ(queue.dequeue(), i);
+    CHECK(queue.isEmpty());
+
+    queue.enqueue(10); // fully reusable after the drain
+    queue.enqueue(11);
+    CHECK_EQ(queue.dequeue(), 10);
+    CHECK_EQ(queue.dequeue(), 11);
+    CHECK(queue.isEmpty());
+}
+
+TEST(queue, clear_and_reuse)
+{
+    IntQueue queue;
+    queue.enqueue(1);
+    queue.enqueue(2);
+    queue.clear();
+    CHECK(queue.isEmpty());
+    CHECK_EQ(queue.size(), std::size_t{0});
+
+    queue.enqueue(5); // reusable
+    CHECK_EQ(queue.front(), 5);
+    queue.clear();
+    CHECK(queue.isEmpty());
+
+    // Re-enqueueing after clear must reproduce correct FIFO order.
+    queue.enqueue(100);
+    queue.enqueue(200);
+    CHECK_EQ(queue.dequeue(), 100);
+    CHECK_EQ(queue.dequeue(), 200);
+}
+
+TEST(queue, move_steals_and_source_reusable)
+{
+    IntQueue source;
+    source.enqueue(1);
+    source.enqueue(2);
+
+    IntQueue target(std::move(source));
+    CHECK(source.isEmpty()); // moved-from: empty and valid
+    CHECK_EQ(target.size(), std::size_t{2});
+    CHECK_EQ(target.dequeue(), 1);
+
+    IntQueue target2;
+    target2.enqueue(50);
+    target2 = std::move(target); // move-assign drops target2's old contents
+    CHECK(target.isEmpty());
+    CHECK_EQ(target2.size(), std::size_t{1});
+    CHECK_EQ(target2.front(), 2);
+
+    CHECK_EQ(target2.dequeue(), 2);
+    CHECK(target2.isEmpty());
+}
+
+TEST(queue, interleaved_enqueue_dequeue)
+{
+    IntQueue queue;
+    queue.enqueue(1);
+    queue.enqueue(2);
+    queue.enqueue(3);
+    CHECK_EQ(queue.dequeue(), 1);
+
+    queue.enqueue(4);
+    queue.enqueue(5);
+    CHECK_EQ(queue.front(), 2);
+    CHECK_EQ(queue.dequeue(), 2);
+
+    CHECK_EQ(queue.dequeue(), 3); // drain middle section
+    CHECK_EQ(queue.front(), 4);
+    queue.enqueue(6);
+    queue.enqueue(7);
+    CHECK_EQ(queue.size(), std::size_t{4}); // 4,5,6,7
+    CHECK_EQ(queue.dequeue(), 4);
+    CHECK_EQ(queue.dequeue(), 5);
+    CHECK_EQ(queue.dequeue(), 6);
+    CHECK_EQ(queue.dequeue(), 7);
+    CHECK(queue.isEmpty());
+}
+
+TEST(queue, stress_10k_fifo)
+{
+    IntQueue queue;
+    const int n = 10000;
+    for (int i = 0; i < n; ++i)
+        queue.enqueue(i);
+
+    CHECK_EQ(queue.size(), std::size_t{n});
+    CHECK_EQ(queue.front(), 0);
+
+    long long sum = 0;
+    int count = 0;
+    while (!queue.isEmpty())
+    {
+        sum += queue.dequeue();
+        ++count;
+    }
+    CHECK_EQ(count, n);
+    CHECK_EQ(sum, static_cast<long long>(n) * (n - 1) / 2);
+    CHECK(queue.isEmpty());
+
+    queue.enqueue(-1); // reuse after a 10k drain
+    CHECK_EQ(queue.front(), -1);
 }
