@@ -38,6 +38,7 @@ add_executable(unit-tests
     tests/ds_tests.cpp
     tests/graph_tests.cpp
     tests/io_tests.cpp
+    tests/analysis_tests.cpp
 )
 
 target_include_directories(dep-analyzer PRIVATE src)

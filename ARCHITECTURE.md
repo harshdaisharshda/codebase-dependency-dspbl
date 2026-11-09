@@ -1,10 +1,11 @@
 # ARCHITECTURE.md — Codebase Dependency Analyzer
 
-**Status:** v2.3 — Decisions approved by the team (2026-11-07) and locked in §9.
-Phase 0–3 as-built: DS library (`src/ds/`), DependencyGraph model
-(`src/graph/dependency_graph.h`), and scanning/parsing (`src/io/`) are
-implemented and unit-tested; their interfaces live in those headers.
-Analytics interfaces remain unspecified until Phase 4.
+**Status:** v2.4 — Decisions approved by the team (2026-11-07) and Phase 4 review
+rulings approved in §9 (2026-11-09). Phase 0–4 as-built: DS library (`src/ds/`),
+DependencyGraph model (`src/graph/dependency_graph.h`), scanning/parsing
+(`src/io/`), and the analytics engine (`src/graph/analysis.h`, features F2–F8)
+are implemented and unit-tested; their interfaces live in those headers.
+Menu integration and the six BFS variants remain future work (Phases 5–7).
 
 > Note: the synopsis is a **Word document**, not the PDF initially referenced
 > (`docs/Project_Synopsis_Codebase_Dependency_Analyzer.docx`). The file is
@@ -309,6 +310,35 @@ dsproject/
     strings; comment markers inside targets are literal (ruling #1). Trie
     population deferred until Phase 4/7 (approved deviation); `main.cpp`
     menu untouched until Phase 7 (approved deviation (b)).
+
+**Phase 4 rulings (approved 2026-11-09, implemented in `analysis.h`):**
+12. **No Tarjan/SCC (R1):** F2 reports *cycle instances only* — closed paths
+    (first node repeated last) reconstructed via the DFS-tree parent chain on
+    the custom Stack. The report cap (default 16) bounds **stored instances,
+    not detection**: `cyclesFound` counts every back edge and the DFS keeps
+    walking. Cycle-blocked/topo-leftover wording (F4) is a *blocked* set: it
+    includes nodes transitively DEPENDING on a cycle member, not just members.
+13. **DFS recursion guard (R2):** recursive DFS with `maxDepth`, default
+    10 000 (parameterized so tests can force a trip). A tripped guard means
+    "results partial — no full verdict"; it never crashes and never publishes
+    partially computed results. For F5 the answer becomes undefined +
+    `depthGuardTripped` (review #3); in the standard configuration the step-2
+    guard branch is defensively unreachable because step 1 runs the same
+    `findCycles` check first (documented behavior).
+14. **Impact level 0 = the changed file itself (R3):** dependents start at
+    level 1; −1 = unaffected; `affectedCount` includes the changed file.
+    Impact flows over **predecessors** (who includes me) only.
+15. **F8 `from == to` (R4):** found, path `[from]` (single entry).
+16. **F7 empty prefix → empty result (R5);** the Trie returned by
+    `buildNameIndex` is **caller-owned** and stores no graph reference
+    (no coupling — review ruling #4). Prefix search is byte-exact case
+    sensitive, keyed on basenames.
+17. **F6 hub ranking deterministic ties:** in-degree desc, then ascending
+    fileId (⇒ lexicographic path order via sorted id assignment); heap built
+    with O(V) `buildFrom` heapification, not repeated inserts.
+18. **Determinism rule for all analytics:** traversals seed/visit in node-id
+    order, adjacency lists keep insertion order, and every result vector is
+    caller-owned (AGENTS §5) — all outputs reproducible.
 
 **Remaining confirmations (not implementation blockers):**
 1. **B1–B6 remain provisional.** They implement the instructor's "six meaningful

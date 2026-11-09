@@ -130,31 +130,41 @@ Exit criteria — ALL MET:
 
 ---
 
-## Phase 4 — Core graph algorithms & features (synopsis F1–F8)  *(4–5 sessions) — PENDING*
+## Phase 4 — Core graph algorithms & features (synopsis F1–F8)  *(4–5 sessions) — DONE 2026-11-09*
 
-4.1 Cycle detection (**DFS + Stack**): 3-color iterative DFS with explicit
-    `Stack<DFSFrame>`, frames track the cursor position in the Linked List of edges.
-    Reports: simple cycle instances (capped) + node->SCC-id map (Tarjan, iterative,
-    our Stack) for groups.
-4.2 Topological order (**Queue / multi-source BFS**): Kahn's algorithm; leftovers
-    (inside/after cycles) reported via the SCC map of 4.1.
+4.1 Cycle detection (**DFS + Stack**): 3-color recursive DFS with a depth guard
+    (default 10 000 per review ruling R2). Reports closed **cycle instances**
+    (first node repeated last; storage capped at `maxReportedInstances`, default
+    16) **without capping detection** (`cyclesFound` counts every back edge —
+    review ruling R1: no Tarjan/SCC; cycle instances only).
+    ~~node->SCC-id map (Tarjan, iterative)~~ **amended as-built per R1.**
+4.2 Topological order (**Queue / multi-source BFS-style Kahn**): seeds = all
+    out-degree-0 nodes in id order (dependencies compile first); leftovers
+    = `cycleBlocked` (nodes on a cycle **and** nodes transitively depending on
+    one — a "blocked" set, not cycle membership; F2 lists instances).
 4.3 Impact analysis (**Queue / reverse BFS**): all transitive dependents of a file,
-    levels = distance.
-4.4 Deepest dependency chain (**recursive DFS**): compute the longest dependency
-    chain when the graph is a DAG; **if cycles exist, report that the longest
-    dependency chain is undefined for this graph** (list the cycle groups instead;
-    do NOT present an SCC condensation as a real file-level chain). Policy
-    approved by the team 2026-11-07 (ARCHITECTURE.md §9).
-4.5 Highly connected modules (**MaxHeap**): build-heap on in-degree; extract top-k
-    (k = user input); tie-break deterministic.
-4.6 Prefix search (**Trie**): search + existence; handle multiple basenames / prefix hits.
-4.7 Path between two files (**bidirectional BFS**, see Phase 5 B3 — implement
-    together with 4.7 test cases).
-4.8 Dependency tree/levels **console output formatting** (synopsis sample output style).
+    levels = distance; **level 0 = the changed file itself** (ruling R3), −1 =
+    unaffected.
+4.4 Deepest dependency chain (**recursive memoized DFS**): longest chain when the
+    graph is a DAG; **if cycles exist the result is undefined** (`firstCycle`
+    lists one closed instance; never an SCC condensation). A tripped guard
+    marks the result **incomplete** — no partially computed chain is published
+    (review ruling #3/F5 policy).
+4.5 Highly connected modules (**MaxHeap**): `buildFrom` O(V) heapify of all
+    in-degrees (bulk justification); extract top-k; ties → smaller fileId.
+4.6 Prefix search (**Trie**): basename index built by `buildNameIndex`
+    (caller-owned; no graph reference stored — ruling R4 in review #4); prefix
+    search + basename existence; empty prefix → empty result (R5).
+4.7 Path between two files (**classic forward BFS** now; Phase 5 B3 bidirectional
+    variant benchmarks against exactly this fallback).
+4.8 Dependency tree/levels **console output formatting** — **DEFERRED to
+    Phase 7** (menu/console layer, as planned).
 
-Exit criteria — one test per feature against the fixture project with
-hand-computed answers, including: 2-cycle, 3-cycle, self-include, disconnected,
-diamond, duplicate basenames, unresolved-include scenario.
+Exit criteria — ALL MET (2026-11-09): one test per feature class on the fixture
+project with hand-computed answers, covering: acyclic, 2-cycle, 3-cycle,
+self-include, disconnected, diamond, duplicate basenames, report-cap semantics,
+depth-guard semantics, and a Layer-4 scanner→algorithms integration test.
+**131 tests / 52 275 checks green** in Debug (ASan/UBSan) + Release, 0 warnings.
 
 ---
 
