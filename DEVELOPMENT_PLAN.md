@@ -168,45 +168,72 @@ depth-guard semantics, and a Layer-4 scanner→algorithms integration test.
 
 ---
 
-## Phase 5 — Six BFS variations (**instructor addendum**)  *(2–3 sessions) — PENDING*
+## Phase 5 — Six BFS variations (**instructor addendum**) + benchmark scaffolding  *(3–4 sessions) — planning locked 2026-11-14 (rulings §9.19–25); 5.1 DONE 2026-11-14; 5.2–5.4 pending*
 
-Implement both directions where relevant and make each variant reachable from the
-menu (corresponding synopsis features) and from the benchmark runner.
+One shared core (`runCore`) backs B1/B2/B4/B5 — **5.1 shipped**: `explore`,
+`exploreMultiSource`, `exploreReverse`, `exploreBounded` over one engine
+(ds::Queue frontier, DynArray level/parent tables, counters sampled during
+traversal). Results follow AGENTS §5's caller-owned-arrays rule:
+`ds::DynArray<int>` level/parent tables (−1 fills via explicit loops;
+reports are move-only). B3 and B6 are separate engines (5.2/5.3).
+`analysis.h` stays untouched and serves as the test oracle (ruling §9.21).
 
 | # | Variation | Library name | Used by (feature) | Verification test |
 |---|-----------|--------------|--------------------|--------------------|
-| B1 | Single-source BFS forward | `bfs_forward` | transitive-deps view | equals DFS reachability set on DAGs |
-| B2 | Multi-source BFS | `bfs_multi_source` | Kahn's topo (F4) + "several changed files" impact | equals sequential single-source union for level-consistency |
-| B3 | **Bidirectional BFS** | `bfs_bidirectional` (two frontiers, meet middle) | F8 path A→B | path length equals classic BFS path length; both agree or neither finds a path |
-| B4 | Reverse-graph BFS | `bfs_reverse` | F3 impact engine | equals BFS over manually reversed graph |
-| B5 | **Bounded-depth BFS** | `bfs_bounded` | depth-limited impact/deps views | `depth = ∞` result == B1 (and == B4 in reverse mode) |
-| B6 | **Direction-optimizing BFS** | `bfs_direction_optimizing` | performance mode for B1/B4 on large graphs | vertex set always equals B1; switch counter (`mode` changes) sanity-checks |
+| B1 | Single-source BFS forward | `bfs_forward` (`explore`) | transitive-deps view | reachability set ≡ per-node `dependencyPath(seed, v)` on small graphs |
+| B2 | Multi-source BFS | `bfs_multi_source` (`exploreMultiSource`) | Kahn's topo (F4) + "several changed files" impact | ≡ sequential single-source union (level = nearest seed); **one seed ≡ B1** (ruling §9.23) |
+| B3 | **Bidirectional BFS** | `bfs_bidirectional` (`bidirectionalPath`) | F8 path A→B — **unbounded only, no hop budget** (ruling §9.22) | path length equals classic-BFS (`analysis::dependencyPath`) length; both agree or neither finds a path |
+| B4 | Reverse-graph BFS | `bfs_reverse` (`exploreReverse`) | F3 impact engine | levels ≡ `analysis::impactOf` (oracle) and ≡ B1 over a manually reversed graph |
+| B5 | **Bounded-depth BFS** | `bfs_bounded` (`exploreBounded`) | depth-limited impact/deps views | `depth = ∞` result ≡ B1; bounded cutoff + `boundHit` exact |
+| B6 | **Direction-optimizing BFS** | `bfs_direction_optimizing` (`exploreDirectionOptimizing`) | performance mode for B1/B4 on large graphs | level array ≡ B1 always; mode counters **consistent** (Σ levels == levels expanded); the simplified per-level heuristic alone decides switching — tests never force a direction (ruling §9.19) |
 
-Fairness: each variation measured against its natural fallback (B3 vs classic BFS
-pathfind; B6 vs B1 classic push BFS; B2 vs repeated single-source), because B6 vs
-B3 etc. aren't comparable in semantics (see §7 in ARCHITECTURE.md).
+Counters (computed during traversal, never derived afterwards): vertices
+visited, edges examined, max frontier size; asserted numerically on known
+graphs (chain-of-5, star, diamond, disconnected, self-loop seed). B3 counters
+cover both frontiers; B6 adds top-down/bottom-up level counts.
 
-Exit criteria — all equivalence tests pass; all six are callable from the
-benchmark runner with counter output.
+Benchmark scaffolding (absorbed from Phase 6, ruling §9.24):
+- `src/bench/graph_generators.h` — seeded, deterministic, unit-testable;
+  shapes chain / tree-like / sparse / dense (≈8 edges/node cap) / hub-heavy
+  at 1k, 5k, 10k nodes; acyclic by construction.
+- `src/bench/benchmark_runner.h` + `bench` binary — warm-up + 10 trials per
+  (variant × graph), drop min/max, mean/median/stdev of 8; rotated variant
+  order; single graph object; steady_clock; Release only.
+- Pairings per fairness rule: **B1 vs B6** (full traversal cost on the same
+  graph/seed); **B3 vs `analysis::dependencyPath`** — the existing Phase 4
+  implementation is the shortest-path baseline; **B5 is benchmarked only at
+  meaningful bounded depths** (unlimited B5 ≡ B1 is an equivalence asserted
+  in tests, so no separate unlimited-depth timing comparison). Other
+  equivalences are asserted in tests, not benchmarked: **B2 with one seed
+  ≡ B1**, and **B4 ≡ `analysis::impactOf` levels ≡ B1 over a manually
+  reversed graph** (ruling §9.23; the earlier "B4 ≡ B2-restricted" phrasing
+  was wrong and is removed).
+- CSV output to `results/` (raw + summary, documented versioned schema).
+- Generator orientation rule: chain = **node i+1 depends on node i** (edges
+  point to earlier ids, per the acyclic-by-construction rule).
+
+Exit criteria — all equivalence tests pass; counters exact on known graphs;
+all six callable from the benchmark runner with counter output; CSV opens
+cleanly; benchmark numbers recorded from real Release runs only.
 
 ---
 
-## Phase 6 — Benchmarking suite (**instructor addendum**)  *(2–3 sessions) — PENDING*
+## Phase 6 — Benchmarking suite (**instructor addendum**)  *(1 session) — RESCOPED 2026-11-14*
 
-- [ ] Generators (seeded): sparse random / dense / layered DAG / cycle-rich / tree+chords.
-- [ ] Runner: warm-up + ≥10 trials, drop min/max, mean/median/stdev; rotated
-      algorithm order per trial; single-threaded.
-- [ ] Metrics: `time_us`, `visited`, `edges_examined`, `max_frontier`.
-- [ ] CSV writer (raw + summary; documented schema); writes to `results/`.
-- [ ] Menu item 12 (benchmark) → run on current graph OR on generated suite;
-      print environment info (build, flags, CPU) into CSV/report.
+Generators, runner discipline, counters and CSV now ship with Phase 5
+(ruling §9.24). Phase 6 keeps only the final deliverables:
+
+- [ ] Freeze benchmarks: final frozen run on all 15 synthetic graphs
+      (5 shapes × 1k/5k/10k) + the scanned fixture; record environment
+      (machine, build type, flags) into the CSV meta/report.
+- [ ] Confirm results/ CSV schema docs match the as-built writer.
+- [ ] Results committed only from real runs; TASK_LOG records machine/setup.
 
 Exit criteria
-- Sanity: on a known graph, visited counts match passed unit tests exactly;
-  timing values are plausible (e.g., >0, scale upward with size on the largest
-  dense case) — **smoke check only; no timing assertions**.
-- CSV file opens cleanly; one row per (graph × algorithm × trial); environment
-  recorded. Results **must come from real runs**; docs/TASK_LOG record machine/setup.
+- Sanity: counters on the fixture graph match the unit-tested exact values;
+  timing values plausible (>0, scale with size on the largest dense case) —
+  **smoke check only; no timing assertions**.
+- Environment recorded; no invented numbers anywhere.
 
 ---
 

@@ -1,11 +1,15 @@
 # ARCHITECTURE.md — Codebase Dependency Analyzer
 
-**Status:** v2.4 — Decisions approved by the team (2026-11-07) and Phase 4 review
-rulings approved in §9 (2026-11-09). Phase 0–4 as-built: DS library (`src/ds/`),
-DependencyGraph model (`src/graph/dependency_graph.h`), scanning/parsing
-(`src/io/`), and the analytics engine (`src/graph/analysis.h`, features F2–F8)
-are implemented and unit-tested; their interfaces live in those headers.
-Menu integration and the six BFS variants remain future work (Phases 5–7).
+**Status:** v2.6 — Decisions approved by the team (2026-11-07), Phase 4 review
+rulings in §9 (2026-11-09), and Phase 5 planning rulings §9.19–25
+(2026-11-14). Phase 0–4 as-built (DS library `src/ds/`, DependencyGraph model
+`src/graph/dependency_graph.h`, scanning/parsing `src/io/`, analytics engine
+`src/graph/analysis.h`). Phase 5.1 as-built: `src/graph/bfs.h` — shared BFS
+core behind B1/B2/B4/B5 (`explore`, `exploreMultiSource`, `exploreReverse`,
+`exploreBounded`) with move-only `ds::DynArray<int>` result tables and
+traversal counters. B3 (bidirectional path) and B6 (direction-optimizing)
+plus benchmark scaffolding are planned (Phase 5.2–5.4); menu integration
+remains Phase 7.
 
 > Note: the synopsis is a **Word document**, not the PDF initially referenced
 > (`docs/Project_Synopsis_Codebase_Dependency_Analyzer.docx`). The file is
@@ -181,7 +185,7 @@ Direction convention: edge `A → B` = A depends on B. "Forward" = follow includ
 | B3 | **Bidirectional BFS** | F8 path A→B between two files | two frontiers (one forward from A, one reverse from B), alternate expanding the smaller one, meet in the middle | dramatically fewer vertices on hub-rich graphs: O(b^(d/2)) for path length d vs BFS's O(b^d) |
 | B4 | **Reverse-graph BFS (single source)** | F3 impact analysis engine: who transitively depends on changed file | BFS over **predecessor** adjacency | O(V+E), levels = distance from changed file |
 | B5 | **Bounded-depth BFS** | "look only N hops ahead" mode of F3/F7-like views (direct deps vs. deep groups) | FIFO with per-level counter stopping at maxDepth | O(V + E_k) where E_k = edges within k levels |
-| B6 | **Depth-optimizing BFS** | performance mode for B1/B4 on large graphs (benchmark showcase, no new user feature) | starts top-down (push from frontier); when frontier becomes dense switches bottom-up (unclaimed nodes check their predecessors). Beamer–Asanović–Patterson-style "direction-optimizing BFS" | same asymptotic bound, but *edges examined per claim* drops on graphs with dense frontiers |
+| B6 | **Depth-optimizing BFS** | performance mode for B1/B4 on large graphs (benchmark showcase, no new user feature) | starts top-down (push from frontier); when frontier becomes dense switches bottom-up (unclaimed nodes check their predecessors). Beamer–Asanović–Patterson-style "direction-optimizing BFS", implemented as a **simplified per-level push/pull heuristic** (ruling §9.19, approved 2026-11-14) | same asymptotic bound, but *edges examined per claim* drops on graphs with dense frontiers. Levels/visited set provably equal B1; discovery order may differ (documented) |
 
 Why they are **not** just six implementations of one algorithm:
 
@@ -203,11 +207,13 @@ are asserted in tests so comparisons stay honest.
 
 - **Timer:** `std::chrono::steady_clock` (monotonic — immune to wall-clock changes).
 - **Graph material for benchmarks:** synthesized with a seeded generator so every
-  size/shape is reproducible and fair across variants:
-  - small→large vertex counts (e.g., 50 → 2000),
-  - **sparse** (few edges per file — typical real projects) vs **dense** (many edges),
-  - structural shapes: layered DAG (realistic include trees), cycle-rich clusters
-    (exercise B4/B2 leftovers), uniform random.
+  size/shape is reproducible and fair across variants. **Approved shape set
+  (2026-11-14 — supersedes the earlier illustrative list):** chain, tree-like,
+  sparse, dense, hub-heavy — at **1k / 5k / 10k nodes**. All five shapes are
+  acyclic by construction (edges point to earlier ids); cycle behaviour is
+  exercised by unit tests, not benchmarks. Edge budgets: chain/tree-like
+  ≈ V−1, sparse ≈ 2.5/node, **dense capped at ≈ 8/node** (ruling §9.20),
+  hub-heavy ≈ 2/node with ~5% hubs holding ~40% of edge mass.
   Real scanned fixtures are benchmarked too (realism cross-check).
 - **Metrics per run:** elapsed time (µs), vertices visited, edges examined,
   maximum queue/frontier size reached. These are computed during the traversal,
@@ -310,6 +316,42 @@ dsproject/
     strings; comment markers inside targets are literal (ruling #1). Trie
     population deferred until Phase 4/7 (approved deviation); `main.cpp`
     menu untouched until Phase 7 (approved deviation (b)).
+
+**Phase 5 rulings (approved 2026-11-14, planning locked before implementation):**
+19. **B6 direction-optimizing BFS** uses a **simplified per-level top-down /
+    bottom-up heuristic** (documented divergence from the full Beamer cost
+    model). The heuristic alone decides switching — tests verify correctness
+    (level array ≡ B1) and counter consistency, never a forced direction.
+    B6's determinism guarantee is therefore levels/visited-set equality with
+    B1; discovery order may differ (documented per variant).
+20. **Benchmark shape set locked:** chain, tree-like, sparse, dense,
+    hub-heavy at 1k/5k/10k nodes (supersedes §6's earlier illustrative list;
+    all acyclic by construction); dense capped at ≈ 8 edges/node.
+21. **Phase 4 stays untouched:** `analysis.h` is not refactored to delegate to
+    the new BFS core; its functions serve as **test oracles** (B4 ≡
+    `impactOf` levels; B3 length ≡ `dependencyPath`). Phase 5 code reuse is
+    internal to bfs.h: one shared core backs B1/B2/B4/B5; B3 and B6 are
+    separate engines.
+22. **B3 is unbounded only** — no hop-budget knob in API, counters, tests or
+    docs (revised from the original plan proposal).
+23. **Equivalence roles:** B2 with one seed ≡ B1 (forward view);
+    B4 ≡ `analysis::impactOf` (reverse view). These replace the earlier
+    muddled pairing in TESTING_STRATEGY §7.
+24. **Benchmark scaffolding moved into Phase 5** (user request 2026-11-14):
+    generators + runner + CSV ship with the variants; Phase 6 shrinks to the
+    final frozen run, environment recording, and reporting polish (menu wiring
+    remains Phase 7).
+25. **Final Phase 5 planning corrections (2026-11-14, same session):**
+    (a) TraversalReport's level/parent result tables are **`ds::DynArray<int>`**,
+    not `std::vector` — consistent with Phase 4's internal tables and the
+    custom-DS requirement; reports are move-only; −1 initialisation via
+    explicit loops (DynArray has no `assign` method; API verified sufficient:
+    value-init size ctor, `operator[]`, `size()`, noexcept move).
+    (b) Benchmark equivalence wording corrected: **B2 with one seed ≡ B1**;
+    **B4 ≡ `analysis::impactOf` levels ≡ B1 over a manually reversed graph**;
+    the earlier "B4 ≡ B2-restricted" phrasing is wrong and removed.
+    (c) Chain generator orientation fixed: **node i+1 depends on node i** so
+    edges point to earlier ids (acyclic-by-construction rule).
 
 **Phase 4 rulings (approved 2026-11-09, implemented in `analysis.h`):**
 12. **No Tarjan/SCC (R1):** F2 reports *cycle instances only* — closed paths

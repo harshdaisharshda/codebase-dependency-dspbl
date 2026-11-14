@@ -182,11 +182,17 @@ Format checks decompose outputs into structural asserts, not byte-diff.
 Correctness first, always:
 - On a known graph, every BFS variant's visited/edges/frontier counters are
   asserted numerically (exact values) — counters are features, not byproducts.
-- **Equivalence tests** (invariant across sizes):
-  B5 with very large depth ≡ B1's visited set;
-  B4 single-source == B2 restricted to that source's reverse reachability;
-  B6 visited set == B1 visited set always;
-  B3 path length == plain-BFS path length when a path exists.
+- **Equivalence tests** (invariant across sizes; Phase 5 rulings 2026-11-14):
+  B2 with a single seed ≡ B1 (same levels, same counters modulo seed order);
+  B5 with very large depth ≡ B1 (levels and visited set);
+  B4 single-source == `analysis::impactOf()` levels (Phase 4 as oracle) and
+  == B1 run over a manually reversed copy of the graph;
+  B6 level array == B1 level array always (visited set implied); B6 mode
+  counters must be *consistent* (top-down + bottom-up levels == number of
+  expanded levels) — the heuristic alone decides switching, tests never force
+  a direction;
+  B3 path length == plain-BFS (`analysis::dependencyPath`) path length when a
+  path exists; B3 is unbounded only (no hop-budget knob anywhere).
 
 Timing methodology (never gates correctness):
 - warm-up runs discarded; ≥10 measured trials per (algorithm × graph);
