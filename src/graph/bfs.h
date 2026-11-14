@@ -3,8 +3,8 @@
 //
 // Phase 5 — the six BFS variations (instructor addendum). As-built:
 // Phase 5.1 shipped the shared core plus B1/B2/B4/B5; Phase 5.2 shipped B3
-// (unbounded bidirectional path). B6 (direction-optimizing) is a separate
-// engine, planned for Phase 5.3.
+// (unbounded bidirectional path); Phase 5.3 shipped B6
+// (direction-optimizing). All six live here.
 //
 // House rules (identical to analysis.h): free functions over a FINALIZED
 // graph::DependencyGraph; algorithms only READ the graph; results are
@@ -41,6 +41,7 @@
 
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -348,6 +349,148 @@ inline PathReport bidirectionalPath(const graph::DependencyGraph& graph,
         report.found = true;
         met = true;
     }
+    return report;
+}
+
+// ---------------------------------------------------------------------------
+// B6 — direction-optimizing BFS (Phase 5.3, ruling §9.19). Forward BFS from a
+// single seed with a SIMPLIFIED per-level push/pull heuristic — a documented
+// divergence from the full Beamer–Asanović–Patterson cost model:
+//
+//   top-down (push): every wavefront vertex scans its successors and claims
+//                    unclaimed ones (identical to B1's discipline).
+//   bottom-up (pull): every UNCLAIMED vertex scans its predecessors in id
+//                    order until one belongs to the current wavefront; the
+//                    first hit claims it (remaining predecessor edges of that
+//                    vertex are not scanned — the pull economy).
+//
+//   Per-level decision: estimate both costs in int64 (no overflow at our
+//   scales) and take pull only when it is STRICTLY cheaper; ties go to
+//   top-down (the B1-equivalent default).
+//     pushCost = Σ outDegree(wavefront)                       (exact)
+//     pullCost = unclaimed × edgeCount / n                    (average-case)
+//   (multiply-before-divide keeps small graphs sane: a 10k chain evaluates
+//   pullCost ≈ unclaimed, not 0.)
+//
+// Correctness invariant (asserted by tests): levels and the claimed SET are
+// ALWAYS equal to B1's — a vertex enters level k+1 iff it has a predecessor
+// in the exact level-k wavefront, and pull checks precisely that condition
+// against the same wavefront. Discovery order/parents may differ (documented
+// weakened determinism, ruling §9.19). Cycles/self-loops are guarded by the
+// same claimed test as everywhere else.
+//
+// Counters: verticesVisited/edgesExamined as usual (pull scans count each
+// predecessor edge until the claim); maxFrontier = max WAVEFRONT size across
+// levels (documented: in pull mode there is no queue, so this is not
+// directly comparable to B1's queue peak); topDownLevels + bottomUpLevels =
+// number of expanded levels; boundHit stays false.
+// ---------------------------------------------------------------------------
+inline TraversalReport exploreDirectionOptimizing(
+    const graph::DependencyGraph& graph, const int seed)
+{
+    assert(graph.isFinalized() &&
+           "exploreDirectionOptimizing: graph must be finalized");
+    assert(seed >= 0 && seed < graph.nodeCount() &&
+           "exploreDirectionOptimizing: invalid seed id");
+
+    TraversalReport report;
+    const std::size_t n = static_cast<std::size_t>(graph.nodeCount());
+    ds::DynArray<int> level(n), parent(n);
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        level[i] = -1;
+        parent[i] = -1;
+    }
+    ds::DynArray<bool> inWave(n); // value-initialised false: membership bitmap
+    for (std::size_t i = 0; i < n; ++i)
+        inWave[i] = false;
+
+    level[static_cast<std::size_t>(seed)] = 0;
+    parent[static_cast<std::size_t>(seed)] = seed;
+    inWave[static_cast<std::size_t>(seed)] = true;
+    ++report.counters.verticesVisited;
+    report.counters.maxFrontier = 1;
+
+    const std::int64_t edgeCount =
+        static_cast<std::int64_t>(graph.edgeCount());
+    ds::DynArray<int> wave, nextWave; // wavefront node lists, swapped per level
+    wave.emplaceBack(seed);
+    int currentLevel = 0;
+
+    while (!wave.isEmpty())
+    {
+        // Cost estimates for this level.
+        std::int64_t pushCost = 0;
+        for (std::size_t i = 0; i < wave.size(); ++i)
+            pushCost += static_cast<std::int64_t>(
+                graph.outDegree(wave[i]));
+        const std::int64_t unclaimed =
+            static_cast<std::int64_t>(n) -
+            static_cast<std::int64_t>(report.counters.verticesVisited);
+        const std::int64_t pullCost =
+            edgeCount == 0
+                ? 0
+                : unclaimed * edgeCount / static_cast<std::int64_t>(n);
+        const bool pull = pullCost < pushCost; // ties → top-down
+
+        nextWave = ds::DynArray<int>();
+        if (pull)
+        {
+            ++report.bottomUpLevels;
+            for (int id = 0; id < graph.nodeCount(); ++id)
+            {
+                if (level[static_cast<std::size_t>(id)] != -1)
+                    continue; // already claimed (incl. the seed)
+                const ds::LinkedList<int>& preds = graph.predecessors(id);
+                for (const int p : preds)
+                {
+                    ++report.counters.edgesExamined;
+                    if (inWave[static_cast<std::size_t>(p)])
+                    {
+                        // First frontier predecessor claims the vertex.
+                        level[static_cast<std::size_t>(id)] = currentLevel + 1;
+                        parent[static_cast<std::size_t>(id)] = p;
+                        ++report.counters.verticesVisited;
+                        nextWave.emplaceBack(id);
+                        break; // pull economy: stop scanning this vertex
+                    }
+                }
+            }
+        }
+        else
+        {
+            ++report.topDownLevels;
+            for (std::size_t i = 0; i < wave.size(); ++i)
+            {
+                const int u = wave[i];
+                const ds::LinkedList<int>& succs = graph.successors(u);
+                for (const int v : succs)
+                {
+                    ++report.counters.edgesExamined;
+                    if (level[static_cast<std::size_t>(v)] != -1)
+                        continue;
+                    level[static_cast<std::size_t>(v)] = currentLevel + 1;
+                    parent[static_cast<std::size_t>(v)] = u;
+                    ++report.counters.verticesVisited;
+                    nextWave.emplaceBack(v);
+                }
+            }
+        }
+
+        // Wavefront rollover: clear the old membership, mark the new one.
+        for (std::size_t i = 0; i < wave.size(); ++i)
+            inWave[static_cast<std::size_t>(wave[i])] = false;
+        for (std::size_t i = 0; i < nextWave.size(); ++i)
+            inWave[static_cast<std::size_t>(nextWave[i])] = true;
+
+        if (nextWave.size() > report.counters.maxFrontier)
+            report.counters.maxFrontier = nextWave.size();
+        wave = std::move(nextWave);
+        ++currentLevel;
+    }
+    report.level = std::move(level);   // publish the tables the caller owns
+    report.parent = std::move(parent); // (runCore does this inline; B6 built
+                                       // them as locals)
     return report;
 }
 

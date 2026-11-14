@@ -33,6 +33,10 @@ add_executable(dep-analyzer
     src/main.cpp
 )
 
+add_executable(bench
+    src/bench/bench_main.cpp
+)
+
 add_executable(unit-tests
     tests/test_main.cpp
     tests/ds_tests.cpp
@@ -40,12 +44,16 @@ add_executable(unit-tests
     tests/io_tests.cpp
     tests/analysis_tests.cpp
     tests/bfs_tests.cpp
+    tests/bench_tests.cpp
 )
 
 target_include_directories(dep-analyzer PRIVATE src)
+target_include_directories(bench PRIVATE src)
 target_include_directories(unit-tests PRIVATE src)
 
 set_project_warnings(dep-analyzer)
+set_project_warnings(bench)
 set_project_warnings(unit-tests)
 enable_debug_sanitizers(dep-analyzer)
+enable_debug_sanitizers(bench)
 enable_debug_sanitizers(unit-tests)

@@ -168,7 +168,7 @@ depth-guard semantics, and a Layer-4 scanner→algorithms integration test.
 
 ---
 
-## Phase 5 — Six BFS variations (**instructor addendum**) + benchmark scaffolding  *(3–4 sessions) — planning locked 2026-11-14 (rulings §9.19–25); 5.1 DONE 2026-11-14; 5.2 DONE 2026-11-15; 5.3–5.4 pending*
+## Phase 5 — Six BFS variations (**instructor addendum**) + benchmark scaffolding  *(3–4 sessions) — planning locked 2026-11-14 (rulings §9.19–25); 5.1 DONE 2026-11-14 (`47e2a95`); 5.2 DONE 2026-11-15 (`e96bf99`); 5.3–5.5 DONE 2026-11-15*
 
 One shared core (`runCore`) backs B1/B2/B4/B5 — **5.1 shipped**: `explore`,
 `exploreMultiSource`, `exploreReverse`, `exploreBounded` over one engine
@@ -180,7 +180,26 @@ level-synchronized two-frontier search (smaller side per round, strict
 alternation on size ties), first-second-discovery meeting with smallest-sum
 candidate selection (provably shortest without any balance assumption),
 Stack-based edge-order reconstruction, combined `|F|+|B|` maxFrontier.
-B6 remains a separate engine (5.3).
+B6 shipped as its own engine (5.3): `exploreDirectionOptimizing` — per-level
+push/pull decision, `pushCost = Σ outDegree(wavefront)` vs
+`pullCost = unclaimed × edgeCount / n` (multiply-before-divide), pull only
+when strictly cheaper, ties → top-down; levels/claimed set ≡ B1 (asserted on
+hand-built and all five generated shapes); wavefront held in `DynArray` +
+membership bitmap (no Queue — the structure is deliberately different from
+B1's); wavefront-based `maxFrontier` (not B1's queue peak).
+**5.4 shipped**: generators (`src/bench/graph_generators.h` — SplitMix64 RNG,
+exact edge budgets with retry-on-duplicate, acyclic by construction, asserted
+non-empty output graph) and the runner (`src/bench/benchmark_runner.h` +
+`src/bench/bench_main.cpp`, `bench` CMake target): 15 graphs × 7 variants,
+warm-up 1 + 10 trials, drop min/max → stats over 8, rotated variant order per
+trial, untimed graph construction/validation (`findCycles` acyclicity + B3 vs
+classic reachability agreement), counter drift across trials asserted in the
+runner (determinism, not noise), steady_clock, Release-only runs. Output:
+`results/benchmarks_raw.csv` (1050 trial rows), `results/benchmarks_summary.csv`
+(105 rows), `results/benchmark_env.txt` — **schema v1**, columns per
+ARCHITECTURE §6. First Release run (2026-11-15, Apple LLVM 21.0.0): recorded
+in TASK_LOG; `b3_classic_baseline` counter columns are zeros by definition
+(Phase 4 API predates counters).
 `analysis.h` stays untouched and serves as the test oracle (ruling §9.21).
 
 | # | Variation | Library name | Used by (feature) | Verification test |
@@ -220,6 +239,9 @@ Benchmark scaffolding (absorbed from Phase 6, ruling §9.24):
 Exit criteria — all equivalence tests pass; counters exact on known graphs;
 all six callable from the benchmark runner with counter output; CSV opens
 cleanly; benchmark numbers recorded from real Release runs only.
+**All met 2026-11-15** (171 tests green Debug ASan/UBSan + Release, 0
+warnings; 1050 timed executions from the real Release run; CSV row counts
+exact).
 
 ---
 

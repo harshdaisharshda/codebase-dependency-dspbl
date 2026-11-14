@@ -14,6 +14,7 @@
 #include "graph/bfs.h"
 #include "graph/dependency_graph.h"
 #include "io/project_scanner.h"
+#include "bench/graph_generators.h"
 
 #include <filesystem>
 #include <string>
@@ -720,4 +721,163 @@ TEST(integration, scanned_fixture_bidirectional_path)
     const bfs::PathReport unreachable = bfs::bidirectionalPath(graph, 10, 8);
     CHECK(unreachable.found == false);
     CHECK(analysis::dependencyPath(graph, 10, 8).found == false);
+}
+
+// ===========================================================================
+// B6 — direction-optimizing BFS (Phase 5.3)
+// ===========================================================================
+//
+// Ruling §9.19: tests verify correctness (levels ≡ B1) and counter
+// consistency — they NEVER force a switching direction.
+
+TEST(direction_optimizing, levels_match_explore_on_hand_built_graphs)
+{
+    // chain, star, diamond, self-loop: four hand-built disciplines.
+    {
+        graph::DependencyGraph g; // chain 0→1→2→3→4
+        for (int i = 0; i < 5; ++i)
+            g.addNode("c" + std::to_string(i) + ".cpp",
+                      "c" + std::to_string(i) + ".cpp");
+        for (int i = 0; i + 1 < 5; ++i)
+            CHECK(g.addEdge(i, i + 1));
+        g.finalize();
+        const bfs::TraversalReport plain = bfs::explore(g, 0);
+        const bfs::TraversalReport optim = bfs::exploreDirectionOptimizing(g, 0);
+        for (int i = 0; i < 5; ++i)
+            CHECK_EQ(optim.level[static_cast<std::size_t>(i)],
+                     plain.level[static_cast<std::size_t>(i)]);
+        CHECK_EQ(optim.counters.verticesVisited,
+                 plain.counters.verticesVisited);
+    }
+    {
+        graph::DependencyGraph g; // star hub 0, leaves 1..5
+        for (int i = 0; i < 6; ++i)
+            g.addNode("s" + std::to_string(i) + ".h",
+                      "s" + std::to_string(i) + ".h");
+        for (int leaf = 1; leaf < 6; ++leaf)
+            CHECK(g.addEdge(0, leaf));
+        g.finalize();
+        const bfs::TraversalReport plain = bfs::explore(g, 0);
+        const bfs::TraversalReport optim = bfs::exploreDirectionOptimizing(g, 0);
+        for (int i = 0; i < 6; ++i)
+            CHECK_EQ(optim.level[static_cast<std::size_t>(i)],
+                     plain.level[static_cast<std::size_t>(i)]);
+    }
+    {
+        graph::DependencyGraph g; // diamond + a second component + self-loop
+        for (int i = 0; i < 7; ++i)
+            g.addNode("m" + std::to_string(i) + ".h",
+                      "m" + std::to_string(i) + ".h");
+        CHECK(g.addEdge(0, 1));
+        CHECK(g.addEdge(0, 2));
+        CHECK(g.addEdge(1, 3));
+        CHECK(g.addEdge(2, 3));
+        CHECK(g.addEdge(4, 4)); // self-loop: claim guard must hold
+        CHECK(g.addEdge(5, 6)); // separate component: unreachable from 0
+        g.finalize();
+        const bfs::TraversalReport plain = bfs::explore(g, 0);
+        const bfs::TraversalReport optim = bfs::exploreDirectionOptimizing(g, 0);
+        for (int i = 0; i < 7; ++i)
+            CHECK_EQ(optim.level[static_cast<std::size_t>(i)],
+                     plain.level[static_cast<std::size_t>(i)]);
+        CHECK_EQ(optim.level[static_cast<std::size_t>(4)], -1);
+        CHECK_EQ(optim.level[static_cast<std::size_t>(5)], -1);
+        CHECK_EQ(optim.level[static_cast<std::size_t>(6)], -1);
+    }
+}
+
+TEST(direction_optimizing, generated_shapes_levels_match_explore)
+{
+    // All five approved shapes at test scale (n=120, fixed seed). B6 must
+    // reproduce B1's levels and visited count everywhere; mode counters must
+    // stay consistent (Σ modes == expanded levels == deepest level + 1).
+    const bench::Shape shapes[] = {
+        bench::Shape::Chain, bench::Shape::Tree,    bench::Shape::Sparse,
+        bench::Shape::Dense, bench::Shape::HubHeavy,
+    };
+    const int n = 120;
+    for (const bench::Shape shape : shapes)
+    {
+        graph::DependencyGraph g;
+        bench::generateGraph(shape, n, 20261115, g);
+
+        const int seed = n / 2;
+        const bfs::TraversalReport plain = bfs::explore(g, seed);
+        const bfs::TraversalReport optim =
+            bfs::exploreDirectionOptimizing(g, seed);
+
+        int deepest = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            CHECK_EQ(optim.level[static_cast<std::size_t>(i)],
+                     plain.level[static_cast<std::size_t>(i)]);
+            if (plain.level[static_cast<std::size_t>(i)] > deepest)
+                deepest = plain.level[static_cast<std::size_t>(i)];
+        }
+        CHECK_EQ(optim.counters.verticesVisited,
+                 plain.counters.verticesVisited);
+        CHECK_EQ(static_cast<int>(optim.topDownLevels + optim.bottomUpLevels),
+                 deepest + 1);
+        CHECK(optim.boundHit == false);
+        // On these instances the first level's push estimate always wins
+        // (level-1 pull cost ≈ n·avgDeg ≫ outDegree of a single seed) — pins
+        // THIS heuristic's behaviour on THIS instance, not a general law.
+        CHECK(optim.topDownLevels >= 1);
+    }
+}
+
+TEST(direction_optimizing, seed_and_empty_frontier_termination)
+{
+    graph::DependencyGraph g; // one isolated node + one node depending on it
+    g.addNode("only.cpp", "only.cpp"); // 0
+    g.addNode("dep.cpp", "dep.cpp");   // 1
+    CHECK(g.addEdge(1, 0));
+    g.finalize();
+
+    // Seed with no dependencies: one top-down level, empty frontier, done.
+    const bfs::TraversalReport r = bfs::exploreDirectionOptimizing(g, 0);
+    CHECK_EQ(r.counters.verticesVisited, std::size_t{1});
+    CHECK_EQ(r.level[static_cast<std::size_t>(0)], 0);
+    CHECK_EQ(r.level[static_cast<std::size_t>(1)], -1);
+    CHECK_EQ(static_cast<int>(r.topDownLevels + r.bottomUpLevels), 1);
+
+    // Reverse role: seed 1 pulls... heuristic decides; only invariants hold.
+    const bfs::TraversalReport r2 = bfs::exploreDirectionOptimizing(g, 1);
+    CHECK_EQ(r2.counters.verticesVisited, std::size_t{2});
+    CHECK_EQ(r2.level[static_cast<std::size_t>(0)], 1);
+    CHECK_EQ(static_cast<int>(r2.topDownLevels + r2.bottomUpLevels), 2);
+}
+
+TEST(integration, scanned_fixture_direction_optimizing_matches_explore)
+{
+    const std::string fixtureRoot = [] {
+        fs::path current = fs::current_path();
+        for (int depth = 0; depth < 8; ++depth)
+        {
+            const fs::path candidate = current / "tests/fixtures/sample_project";
+            if (fs::is_directory(candidate))
+                return candidate.string();
+            if (!current.has_parent_path())
+                break;
+            current = current.parent_path();
+        }
+        return std::string();
+    }();
+    CHECK(!fixtureRoot.empty());
+
+    graph::DependencyGraph graph;
+    io::ScanSummary summary;
+    std::vector<io::ResolutionIssue> issues;
+    std::vector<std::string> warnings;
+    CHECK(io::scanProject(fixtureRoot, graph, summary, issues, warnings));
+    CHECK(graph.isFinalized());
+
+    const bfs::TraversalReport plain = bfs::explore(graph, 8);
+    const bfs::TraversalReport optim = bfs::exploreDirectionOptimizing(graph, 8);
+    for (int v = 0; v < 12; ++v)
+        CHECK_EQ(optim.level[static_cast<std::size_t>(v)],
+                 plain.level[static_cast<std::size_t>(v)]);
+    CHECK_EQ(optim.counters.verticesVisited,
+             plain.counters.verticesVisited); // 5, as in the Phase 5.1 test
+    CHECK_EQ(static_cast<int>(optim.topDownLevels + optim.bottomUpLevels), 3);
 }
