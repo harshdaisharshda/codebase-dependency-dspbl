@@ -57,6 +57,29 @@ static bool reportsIdentical(const bfs::TraversalReport& a,
            a.boundHit == b.boundHit;
 }
 
+// Validates a B3 path: right endpoints, and every consecutive pair is a real
+// forward edge (guards against mis-stitched bidirectional reconstruction).
+static bool isValidPath(const graph::DependencyGraph& g,
+                        const std::vector<int>& path, const int from,
+                        const int to)
+{
+    if (path.empty() || path.front() != from || path.back() != to)
+        return false;
+    for (std::size_t i = 0; i + 1 < path.size(); ++i)
+    {
+        bool edge = false;
+        for (const int v : g.successors(path[i]))
+            if (v == path[i + 1])
+            {
+                edge = true;
+                break;
+            }
+        if (!edge)
+            return false;
+    }
+    return true;
+}
+
 // Replicates tests/fixtures/sample_project in memory (scanner-independent):
 // 12 nodes, ids follow the scanner's sorted relative-path order (same replica
 // as analysis_tests.cpp — independent TU, shared hand-computed answers).
@@ -493,4 +516,208 @@ TEST(integration, scanned_fixture_graph_drives_bfs_core)
     const bfs::TraversalReport bounded = bfs::exploreBounded(graph, 8, 1);
     CHECK_EQ(bounded.counters.verticesVisited, std::size_t{3});
     CHECK(bounded.boundHit == true);
+}
+
+// ===========================================================================
+// B3 — unbounded bidirectional shortest path (Phase 5.2)
+// ===========================================================================
+
+TEST(bidirectional, length_and_found_match_dependency_path_all_pairs)
+{
+    const graph::DependencyGraph g = makeFixtureGraph();
+    for (int from = 0; from < 12; ++from)
+    {
+        for (int to = 0; to < 12; ++to)
+        {
+            const bfs::PathReport r = bfs::bidirectionalPath(g, from, to);
+            const analysis::PathResult plain =
+                analysis::dependencyPath(g, from, to);
+            CHECK_EQ(r.found, plain.found);
+            if (plain.found)
+            {
+                // Locked equivalence: same LENGTH; the exact route may differ
+                // (both are shortest) but every hop must be a real edge.
+                CHECK_EQ(r.path.size(), plain.path.size());
+                CHECK(isValidPath(g, r.path, from, to));
+            }
+            else
+            {
+                CHECK(r.path.empty());
+            }
+        }
+    }
+}
+
+TEST(bidirectional, direct_edge_wins_over_longer_alternative)
+{
+    // Same graph as the Phase 4 shortest-path test: direct 0→3 must beat
+    // the 0→1→2→3 alternative — and here the exact routes must be identical.
+    graph::DependencyGraph g;
+    for (int i = 0; i < 4; ++i)
+        g.addNode("p" + std::to_string(i) + ".cpp", "p" + std::to_string(i) + ".cpp");
+    CHECK(g.addEdge(0, 1));
+    CHECK(g.addEdge(1, 2));
+    CHECK(g.addEdge(2, 3));
+    CHECK(g.addEdge(0, 3));
+    g.finalize();
+
+    const bfs::PathReport r = bfs::bidirectionalPath(g, 0, 3);
+    const analysis::PathResult plain = analysis::dependencyPath(g, 0, 3);
+    CHECK(r.found);
+    CHECK_EQ(r.path.size(), std::size_t{2});
+    CHECK_EQ(r.path[0], 0);
+    CHECK_EQ(r.path[1], 3);
+    CHECK(r.path == plain.path);
+}
+
+TEST(bidirectional, same_file_single_entry_zero_counters)
+{
+    const graph::DependencyGraph g = makeFixtureGraph();
+    const bfs::PathReport r = bfs::bidirectionalPath(g, 6, 6);
+    CHECK(r.found);
+    CHECK_EQ(r.path.size(), std::size_t{1});
+    CHECK_EQ(r.path[0], 6);
+    // No traversal ran: counters stay zero (documented trivial-case contract).
+    CHECK_EQ(r.counters.verticesVisited, std::size_t{0});
+    CHECK_EQ(r.counters.edgesExamined, std::size_t{0});
+    CHECK_EQ(r.counters.maxFrontier, std::size_t{0});
+}
+
+TEST(bidirectional, no_path_is_explicitly_reported)
+{
+    const graph::DependencyGraph g = makeFixtureGraph();
+
+    // Reverse direction: shared/util.h does not depend on main.cpp.
+    const bfs::PathReport backward = bfs::bidirectionalPath(g, 10, 8);
+    CHECK(backward.found == false);
+    CHECK(backward.path.empty());
+    CHECK(backward.counters.verticesVisited > std::size_t{0}); // work recorded
+
+    // Isolated node 9 has no outgoing edges: the forward frontier dies.
+    const bfs::PathReport isolated = bfs::bidirectionalPath(g, 9, 0);
+    CHECK(isolated.found == false);
+    CHECK(isolated.path.empty());
+}
+
+TEST(bidirectional, hub_meeting_counters_and_route_exact)
+{
+    // 0,4,5 depend on hub 1; hub 1 includes hub 2; hub 2 → 3, and 6,7 also
+    // depend on hub 2. Dependency path 0 → 1 → 2 → 3 (3 edges). Rounds 1–2
+    // expand the two seeds (2 edges); round 3's forward expansion meets hub 2
+    // already claimed by the reverse search (1 edge).
+    graph::DependencyGraph g;
+    for (int i = 0; i < 8; ++i)
+        g.addNode("h" + std::to_string(i) + ".cpp", "h" + std::to_string(i) + ".cpp");
+    CHECK(g.addEdge(0, 1)); // leaf → hubA
+    CHECK(g.addEdge(4, 1));
+    CHECK(g.addEdge(5, 1));
+    CHECK(g.addEdge(1, 2)); // hubA includes hubB
+    CHECK(g.addEdge(2, 3)); // hubB → leaf (dependency direction!)
+    CHECK(g.addEdge(6, 2));
+    CHECK(g.addEdge(7, 2));
+    g.finalize();
+
+    const bfs::PathReport r = bfs::bidirectionalPath(g, 0, 3);
+    CHECK(r.found);
+    CHECK_EQ(r.path.size(), std::size_t{4}); // 0,1,2,3 = 3 edges (shortest)
+    CHECK_EQ(r.counters.verticesVisited, std::size_t{4}); // seeds + both hubs
+    CHECK_EQ(r.counters.edgesExamined, std::size_t{3});
+    CHECK_EQ(r.counters.maxFrontier, std::size_t{2}); // |F|+|B| combined
+    CHECK_EQ(r.path[0], 0);
+    CHECK_EQ(r.path[1], 1);
+    CHECK_EQ(r.path[2], 2);
+    CHECK_EQ(r.path[3], 3);
+}
+
+TEST(bidirectional, cycle_on_the_route_terminates_with_shortest_path)
+{
+    // 0→1→2→0 cycle; asking 0→2 must terminate and match plain BFS exactly.
+    graph::DependencyGraph g;
+    for (int i = 0; i < 3; ++i)
+        g.addNode("cy" + std::to_string(i) + ".h", "cy" + std::to_string(i) + ".h");
+    CHECK(g.addEdge(0, 1));
+    CHECK(g.addEdge(1, 2));
+    CHECK(g.addEdge(2, 0));
+    g.finalize();
+
+    const bfs::PathReport r = bfs::bidirectionalPath(g, 0, 2);
+    const analysis::PathResult plain = analysis::dependencyPath(g, 0, 2);
+    CHECK(r.found);
+    CHECK(r.path == plain.path); // [0,1,2]: the cycle adds nothing
+    CHECK_EQ(r.path.size(), std::size_t{3});
+}
+
+TEST(bidirectional, wider_frontiers_are_counted_combined)
+{
+    // Frontiers of different widths; B3 must record |F|+|B| peaks, and the
+    // smaller side expands first (here B's single-node frontier after F's
+    // wide first wave).
+    graph::DependencyGraph g;
+    for (int i = 0; i < 10; ++i)
+        g.addNode("w" + std::to_string(i) + ".cpp", "w" + std::to_string(i) + ".cpp");
+    // from = 0 with three direct dependencies 1,2,3; 1→4→5→9 = the route;
+    // to = 9 with a single dependent 8 (so B's frontier stays thin).
+    CHECK(g.addEdge(0, 1));
+    CHECK(g.addEdge(0, 2));
+    CHECK(g.addEdge(0, 3));
+    CHECK(g.addEdge(1, 4));
+    CHECK(g.addEdge(4, 5));
+    CHECK(g.addEdge(5, 9));
+    CHECK(g.addEdge(8, 9));
+    g.finalize();
+
+    const bfs::PathReport r = bfs::bidirectionalPath(g, 0, 9);
+    const analysis::PathResult plain = analysis::dependencyPath(g, 0, 9);
+    CHECK(r.found);
+    CHECK_EQ(r.path.size(), plain.path.size()); // [0,1,4,5,9]: 4 edges
+    CHECK(r.path == plain.path);
+    // seeds {0,9} + F wave {1,2,3} + B wave {5,8} + F wave {4} = 8 distinct
+    CHECK_EQ(r.counters.verticesVisited, std::size_t{8});
+    CHECK_EQ(r.counters.edgesExamined, std::size_t{7}); // 3+2+1+1 scans
+    CHECK_EQ(r.counters.maxFrontier, std::size_t{5});   // |F|=3 + |B|=2 peak
+}
+
+TEST(integration, scanned_fixture_bidirectional_path)
+{
+    const std::string fixtureRoot = [] {
+        fs::path current = fs::current_path();
+        for (int depth = 0; depth < 8; ++depth)
+        {
+            const fs::path candidate = current / "tests/fixtures/sample_project";
+            if (fs::is_directory(candidate))
+                return candidate.string();
+            if (!current.has_parent_path())
+                break;
+            current = current.parent_path();
+        }
+        return std::string();
+    }();
+    CHECK(!fixtureRoot.empty());
+
+    graph::DependencyGraph graph;
+    io::ScanSummary summary;
+    std::vector<io::ResolutionIssue> issues;
+    std::vector<std::string> warnings;
+    CHECK(io::scanProject(fixtureRoot, graph, summary, issues, warnings));
+    CHECK(graph.isFinalized());
+
+    // main.cpp → shared/util.h: exact 2-hop route on the real scan.
+    const bfs::PathReport r = bfs::bidirectionalPath(graph, 8, 10);
+    CHECK(r.found);
+    CHECK_EQ(r.path.size(), std::size_t{3}); // 8 → 11 → 10
+    CHECK_EQ(r.path[0], 8);
+    CHECK_EQ(r.path[1], 11);
+    CHECK_EQ(r.path[2], 10);
+    CHECK(r.path == analysis::dependencyPath(graph, 8, 10).path);
+
+    // main.cpp → database/database.h: exact 2-hop route via api/api.h.
+    const bfs::PathReport viaApi = bfs::bidirectionalPath(graph, 8, 5);
+    CHECK(viaApi.found);
+    CHECK_EQ(viaApi.path.size(), std::size_t{3});
+    CHECK(viaApi.path == analysis::dependencyPath(graph, 8, 5).path);
+
+    // Unreachable pair agrees with the plain-BFS oracle.
+    const bfs::PathReport unreachable = bfs::bidirectionalPath(graph, 10, 8);
+    CHECK(unreachable.found == false);
+    CHECK(analysis::dependencyPath(graph, 10, 8).found == false);
 }

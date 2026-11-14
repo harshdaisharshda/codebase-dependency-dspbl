@@ -1,15 +1,16 @@
 # ARCHITECTURE.md — Codebase Dependency Analyzer
 
-**Status:** v2.6 — Decisions approved by the team (2026-11-07), Phase 4 review
+**Status:** v2.7 — Decisions approved by the team (2026-11-07), Phase 4 review
 rulings in §9 (2026-11-09), and Phase 5 planning rulings §9.19–25
 (2026-11-14). Phase 0–4 as-built (DS library `src/ds/`, DependencyGraph model
 `src/graph/dependency_graph.h`, scanning/parsing `src/io/`, analytics engine
-`src/graph/analysis.h`). Phase 5.1 as-built: `src/graph/bfs.h` — shared BFS
-core behind B1/B2/B4/B5 (`explore`, `exploreMultiSource`, `exploreReverse`,
-`exploreBounded`) with move-only `ds::DynArray<int>` result tables and
-traversal counters. B3 (bidirectional path) and B6 (direction-optimizing)
-plus benchmark scaffolding are planned (Phase 5.2–5.4); menu integration
-remains Phase 7.
+`src/graph/analysis.h`). Phase 5.1–5.2 as-built: `src/graph/bfs.h` — shared
+BFS core behind B1/B2/B4/B5 (`explore`, `exploreMultiSource`,
+`exploreReverse`, `exploreBounded`) plus **B3** `bidirectionalPath`
+(unbounded, level-synchronized two-frontier search) with move-only
+`ds::DynArray<int>` result tables and traversal counters. B6
+(direction-optimizing) plus benchmark scaffolding are planned (Phase 5.3–5.4);
+menu integration remains Phase 7.
 
 > Note: the synopsis is a **Word document**, not the PDF initially referenced
 > (`docs/Project_Synopsis_Codebase_Dependency_Analyzer.docx`). The file is
@@ -182,7 +183,7 @@ Direction convention: edge `A → B` = A depends on B. "Forward" = follow includ
 |---|-----------|----------------|------------------------------------------|--------------------|
 | B1 | **Single-source BFS (forward)** | reachability view of F1/F5 support: what A transitively depends on | classic FIFO level-by-level | visits O(V+E) |
 | B2 | **Multi-source BFS** | F4 topological sort (Kahn's algorithm seeds the queue with **all** in-degree-0 files); also "several files changed at once" impact on reverse edges | multiple seeds at level 0; waves = compile batches | O(V+E), level ordering |
-| B3 | **Bidirectional BFS** | F8 path A→B between two files | two frontiers (one forward from A, one reverse from B), alternate expanding the smaller one, meet in the middle | dramatically fewer vertices on hub-rich graphs: O(b^(d/2)) for path length d vs BFS's O(b^d) |
+| B3 | **Bidirectional BFS** | F8 path A→B between two files | two frontiers (one forward from A, one reverse from B), expand one LEVEL of the smaller per round with **strict alternation on size ties** (a constant tie rule starves one side — caught in review), meet at the first second-discovery, **choose the meeting vertex with the smallest levelF+levelB sum** (BFS levels are exact distances, so every candidate's sum is a real path length and the earliest second-discovery round always contains a vertex of a shortest path — this keeps the result provably shortest even when one frontier races ahead) | dramatically fewer vertices on hub-rich graphs: O(b^(d/2)) for path length d vs BFS's O(b^d) |
 | B4 | **Reverse-graph BFS (single source)** | F3 impact analysis engine: who transitively depends on changed file | BFS over **predecessor** adjacency | O(V+E), levels = distance from changed file |
 | B5 | **Bounded-depth BFS** | "look only N hops ahead" mode of F3/F7-like views (direct deps vs. deep groups) | FIFO with per-level counter stopping at maxDepth | O(V + E_k) where E_k = edges within k levels |
 | B6 | **Depth-optimizing BFS** | performance mode for B1/B4 on large graphs (benchmark showcase, no new user feature) | starts top-down (push from frontier); when frontier becomes dense switches bottom-up (unclaimed nodes check their predecessors). Beamer–Asanović–Patterson-style "direction-optimizing BFS", implemented as a **simplified per-level push/pull heuristic** (ruling §9.19, approved 2026-11-14) | same asymptotic bound, but *edges examined per claim* drops on graphs with dense frontiers. Levels/visited set provably equal B1; discovery order may differ (documented) |

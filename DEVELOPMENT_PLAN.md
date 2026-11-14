@@ -168,14 +168,19 @@ depth-guard semantics, and a Layer-4 scanner→algorithms integration test.
 
 ---
 
-## Phase 5 — Six BFS variations (**instructor addendum**) + benchmark scaffolding  *(3–4 sessions) — planning locked 2026-11-14 (rulings §9.19–25); 5.1 DONE 2026-11-14; 5.2–5.4 pending*
+## Phase 5 — Six BFS variations (**instructor addendum**) + benchmark scaffolding  *(3–4 sessions) — planning locked 2026-11-14 (rulings §9.19–25); 5.1 DONE 2026-11-14; 5.2 DONE 2026-11-15; 5.3–5.4 pending*
 
 One shared core (`runCore`) backs B1/B2/B4/B5 — **5.1 shipped**: `explore`,
 `exploreMultiSource`, `exploreReverse`, `exploreBounded` over one engine
 (ds::Queue frontier, DynArray level/parent tables, counters sampled during
 traversal). Results follow AGENTS §5's caller-owned-arrays rule:
 `ds::DynArray<int>` level/parent tables (−1 fills via explicit loops;
-reports are move-only). B3 and B6 are separate engines (5.2/5.3).
+reports are move-only). **5.2 shipped**: `bidirectionalPath` — unbounded
+level-synchronized two-frontier search (smaller side per round, strict
+alternation on size ties), first-second-discovery meeting with smallest-sum
+candidate selection (provably shortest without any balance assumption),
+Stack-based edge-order reconstruction, combined `|F|+|B|` maxFrontier.
+B6 remains a separate engine (5.3).
 `analysis.h` stays untouched and serves as the test oracle (ruling §9.21).
 
 | # | Variation | Library name | Used by (feature) | Verification test |

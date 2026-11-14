@@ -1,9 +1,10 @@
 #pragma once
 // src/graph/bfs.h
 //
-// Phase 5 — the six BFS variations (instructor addendum). This file ships the
-// shared core plus B1/B2/B4/B5 (Phase 5.1); B3 (bidirectional path) and B6
-// (direction-optimizing) are separate engines, planned for Phase 5.2/5.3.
+// Phase 5 — the six BFS variations (instructor addendum). As-built:
+// Phase 5.1 shipped the shared core plus B1/B2/B4/B5; Phase 5.2 shipped B3
+// (unbounded bidirectional path). B6 (direction-optimizing) is a separate
+// engine, planned for Phase 5.3.
 //
 // House rules (identical to analysis.h): free functions over a FINALIZED
 // graph::DependencyGraph; algorithms only READ the graph; results are
@@ -35,6 +36,7 @@
 #include "ds/dyn_array.h"
 #include "ds/linked_list.h"
 #include "ds/queue.h"
+#include "ds/stack.h"
 #include "graph/dependency_graph.h"
 
 #include <cassert>
@@ -185,6 +187,168 @@ inline TraversalReport exploreBounded(const graph::DependencyGraph& graph,
                                       int seed, const std::size_t maxDepth)
 {
     return runCore(graph, std::vector<int>{seed}, false, maxDepth);
+}
+
+// ---------------------------------------------------------------------------
+// B3 — unbounded bidirectional BFS (Phase 5.2). Two level-synchronized
+// searches: forward from `from` over successors, reverse from `to` over
+// predecessors. Each round expands ONE level of the SMALLER frontier
+// (tie → forward, deterministic). A vertex discovered by one side that the
+// other side already claimed is a meeting candidate; the round finishes its
+// scan and the candidate with the smallest levelF + levelB sum wins. This is
+// what keeps the result provably shortest even when one frontier races ahead
+// of the other: BFS levels are exact distances, so every candidate's sum is
+// a real path length, and the earliest second-discovery round always contains
+// a vertex of a shortest path (proof sketch in ARCHITECTURE §5).
+//
+// No hop budget (ruling §9.22): the search runs until a meeting is found or
+// a frontier is exhausted (one side can no longer discover anything → no
+// path). from == to → found with the single-node path, counters zeroed (no
+// traversal ran — mirrors F8's [from] ruling R4). Cycles are harmless:
+// discovery guards stop re-entry. Counters: verticesVisited = distinct nodes
+// claimed by either side; edgesExamined = scans from both frontiers;
+// maxFrontier = max of |frontierF| + |frontierB| COMBINED, sampled after
+// seeding and after every round swap.
+// ---------------------------------------------------------------------------
+struct PathReport
+{
+    bool found = false;
+    std::vector<int> path; // [from, ..., to] in edge order; empty when not found
+    Counters counters;
+};
+
+inline PathReport bidirectionalPath(const graph::DependencyGraph& graph,
+                                    const int from, const int to)
+{
+    assert(graph.isFinalized() &&
+           "bidirectionalPath: graph must be finalized");
+    assert(from >= 0 && from < graph.nodeCount() &&
+           "bidirectionalPath: invalid from id");
+    assert(to >= 0 && to < graph.nodeCount() &&
+           "bidirectionalPath: invalid to id");
+
+    PathReport report;
+    if (from == to)
+    {
+        report.found = true;
+        report.path.push_back(from);
+        return report;
+    }
+
+    const std::size_t n = static_cast<std::size_t>(graph.nodeCount());
+    ds::DynArray<int> levelF(n), parentF(n), levelB(n), parentB(n);
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        levelF[i] = -1;
+        levelB[i] = -1;
+        parentF[i] = -1;
+        parentB[i] = -1;
+    }
+    levelF[static_cast<std::size_t>(from)] = 0;
+    parentF[static_cast<std::size_t>(from)] = from;
+    levelB[static_cast<std::size_t>(to)] = 0;
+    parentB[static_cast<std::size_t>(to)] = to;
+    report.counters.verticesVisited = 2;
+
+    ds::Queue<int> frontierF; // required Queue role: both BFS frontiers
+    ds::Queue<int> frontierB;
+    frontierF.enqueue(from);
+    frontierB.enqueue(to);
+    report.counters.maxFrontier = 2; // |F| + |B| at seed time
+
+    std::vector<int> candidates; // meeting vertices discovered this round
+    bool met = false;
+    bool lastForward = false;
+    while (!met && !frontierF.isEmpty() && !frontierB.isEmpty())
+    {
+        candidates.clear();
+        // Smaller frontier expands; on a size tie the sides STRICTLY
+        // ALTERNATE (lastForward flips). A constant "ties → forward" would
+        // starve the reverse search whenever both frontiers stay the same
+        // size — caught by the hub-meeting test.
+        const bool expandForward =
+            frontierF.size() != frontierB.size()
+                ? frontierF.size() < frontierB.size()
+                : !lastForward;
+        lastForward = expandForward;
+        ds::Queue<int>& frontier = expandForward ? frontierF : frontierB;
+        ds::DynArray<int>& levelThis = expandForward ? levelF : levelB;
+        ds::DynArray<int>& levelOther = expandForward ? levelB : levelF;
+        ds::DynArray<int>& parentThis = expandForward ? parentF : parentB;
+
+        ds::Queue<int> next;
+        while (!frontier.isEmpty())
+        {
+            const int u = frontier.dequeue();
+            const ds::LinkedList<int>& adjacency =
+                expandForward ? graph.successors(u) : graph.predecessors(u);
+            for (const int v : adjacency)
+            {
+                ++report.counters.edgesExamined;
+                if (levelThis[static_cast<std::size_t>(v)] != -1)
+                    continue; // this side already claimed v (self-loops too)
+                levelThis[static_cast<std::size_t>(v)] =
+                    levelThis[static_cast<std::size_t>(u)] + 1;
+                parentThis[static_cast<std::size_t>(v)] = u;
+                if (levelOther[static_cast<std::size_t>(v)] == -1)
+                    ++report.counters.verticesVisited; // first side to see v
+                else
+                    candidates.push_back(v); // second discovery: meeting
+                next.enqueue(v);
+            }
+        }
+        if (expandForward)
+            frontierF = std::move(next);
+        else
+            frontierB = std::move(next);
+
+        const std::size_t combined = frontierF.size() + frontierB.size();
+        if (combined > report.counters.maxFrontier)
+            report.counters.maxFrontier = combined;
+
+        if (candidates.empty())
+            continue;
+
+        // Smallest sum wins (tie → first in scan order = deterministic).
+        int best = candidates.front();
+        int bestSum = levelF[static_cast<std::size_t>(best)] +
+                      levelB[static_cast<std::size_t>(best)];
+        for (const int v : candidates)
+        {
+            const int sum = levelF[static_cast<std::size_t>(v)] +
+                            levelB[static_cast<std::size_t>(v)];
+            if (sum < bestSum)
+            {
+                bestSum = sum;
+                best = v;
+            }
+        }
+
+        // Forward half: from ... → best, walked onto the required Stack and
+        // popped back in edge order (same reconstruction role as F2/F8).
+        ds::Stack<int> prefix;
+        int p = best;
+        while (p != from)
+        {
+            prefix.push(p);
+            p = parentF[static_cast<std::size_t>(p)];
+        }
+        report.path.push_back(from);
+        while (!prefix.isEmpty())
+            report.path.push_back(prefix.pop());
+
+        // Reverse-search half: best → ... → to is ALREADY in edge order
+        // (parentB[v] = u means the edge v → u exists).
+        p = best;
+        while (p != to)
+        {
+            p = parentB[static_cast<std::size_t>(p)];
+            report.path.push_back(p);
+        }
+        report.found = true;
+        met = true;
+    }
+    return report;
 }
 
 } // namespace bfs
