@@ -132,6 +132,18 @@ public:
     // Number of stored (name, fileId) pairs.
     std::size_t size() const { return size_; }
 
+    // Diagnostic view (Phase 7 demo; same spirit as MaxHeap::rawEntryAt and
+    // HashTable::hashFor): read-only DFS over the ACTUAL branch structure.
+    // visitor(prefix, isTerminal, fileIds) runs for every reachable node —
+    // prefix is the path from the root ("" = root), fileIds non-empty only at
+    // terminals. Returning false short-circuits the whole walk. Exists so the
+    // terminal UI can draw real trie branches without exposing Node*.
+    template <typename Visitor>
+    void visitNodes(Visitor&& visitor) const
+    {
+        visitDfs(root_, std::string(), visitor);
+    }
+
     // Frees the whole tree; the trie is reusable afterwards.
     void clear()
     {
@@ -227,6 +239,18 @@ private:
                     out.append(id);
         for (const ChildEdge& edge : node->children)
             collectFrom(edge.child, out);
+    }
+
+    template <typename Visitor>
+    void visitDfs(const Node* node, const std::string& prefix,
+                  Visitor& visitor) const
+    {
+        if (node == nullptr)
+            return; // moved-from trie
+        if (!visitor(prefix, node->isTerminal, node->fileIds))
+            return; // visitor short-circuits the walk
+        for (const ChildEdge& edge : node->children)
+            visitDfs(edge.child, prefix + edge.ch, visitor);
     }
 
     static void destroySubtree(Node* node)

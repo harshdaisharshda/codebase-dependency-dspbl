@@ -297,19 +297,56 @@ recorded; no invented numbers anywhere.
 
 ---
 
-## Phase 7 — Menu integration, report output, polish  *(2–3 sessions) — PENDING*
+## Phase 7 — Menu integration, report output, polish  *(2–3 sessions) — DONE 2026-11-15 (as-built per the approved Phase 7 instruction list)*
 
-- [ ] Full menu flow (per ARCHITECTURE.md: menu prompt, feature selection,
-      results, loop). Garbage input handled → re-prompt.
-- [ ] Synthesized outputs: dependency tree (indented like the synopsis example),
-      levels "0 h → 1 hop → 2 hops", cycles listing, impact levels, hub ranking
-      tables, path display, unresolved includes list.
-- [ ] Report saving (`F9`, optional synopsis feature): write menu analysis
-      results to a chosen `.txt` file; graceful failure when not writable.
-- [ ] UX polish: meaningful prompts; "0" exit; load statistics after scan;
-      scan-to-loaded flow; no crash on empty graph/`no files` cases.
+- [x] Full menu flow: numbered 1–9 + 0 menu exactly per the approved layout;
+      banner once, menu per iteration; garbage → "Please enter a number.";
+      EOF exits cleanly; unknown items reported. **Not in the approved
+      instruction list and therefore NOT implemented: `F9` report-to-file
+      (synopsis optional feature) — deferred to a future approval.**
+- [x] Option 1 Scan: directory prompt (empty line = bundled fixture via
+      `bench::locateFixtureRoot`); scan into fresh locals, live state
+      replaced only on success; summary incl. unresolved list + warnings.
+- [x] Option 2 View: numbered `id: path` list + directed edges
+      `A -> B (A depends on B)`.
+- [x] Option 3 Explore: file picker → `bfs::explore` (B1); levels grouped,
+      unreachable count, traversal counters.
+- [x] Option 4 Impact: `analysis::impactOf` (F3); level 0 = changed file,
+      affected count.
+- [x] Option 5 Path: `bfs::bidirectionalPath` (B3); hop count, edge-order
+      route, from==to and no-path cases.
+- [x] Option 6 Prefix: production F7 path (`buildNameIndex` + `filesWithPrefix`
+      + `fileExistsByBasename`).
+- [x] Option 7 Statistics: counts (files/edges/unresolved/unresolvable/self/
+      warnings), F2 cycles (+instances), F6 top-10 in-degree ranking, F5
+      deepest chain, F4 compile order (first 10 when longer).
+- [x] Option 8 DS demos: all seven structures demonstrated LIVE on the real
+      `src/ds` objects — LinkedList arrow diagrams; Stack/Queue discipline
+      traces; HashTable size/buckets/load factor + real placement via the
+      published `hashFor` (shows actual collision chains); DynArray
+      size/capacity checkpoints (16→32); Trie real branch tree via the one
+      Phase 7 API addition (`Trie::visitNodes`, read-only DFS diagnostic view,
+      same precedent as `MaxHeap::rawEntryAt`); MaxHeap live tree levels via
+      `rawEntryAt` + extraction order.
+- [x] Option 9 Benchmarks: the Phase 5/6 runner untouched, writes to
+      `results/menu_run/` (NOT `results/frozen/`); Debug builds print a
+      "timings not citable" warning.
+- File picker: exact path via `findId`, else basename prefix via the Trie
+  index; multi-match numbered sub-selection; empty line cancels; garbage
+  re-prompts.
 
-Exit criteria — manual CLI checklist (in TESTING_STRATEGY.md) all pass; unit-tests still green; no compiler warnings in Release.
+Corrections made in Phase 7 (genuine issues, documented):
+1. **`parseMenuChoice` out-of-bounds read** (Phase 0 latent bug, exposed by
+   the new scripted tests under ASan): `line[digitStart - 1]` underflows when
+   digits start at position 0 → sign is now tracked explicitly while
+   scanning.
+2. Menu layers unit-tested for the first time: `tests/app_tests.cpp` (9
+   scripted tests over `app::run(istream, ostream)`).
+
+Exit criteria — **all met**: menu checklist verified against the fixture
+(options 1–8 scripted, 9 run from the Release binary; `results/frozen/`
+checksum-verified untouched); 181 tests green in Debug (ASan/UBSan) +
+Release; 0 warnings at `-Wall -Wextra`.
 
 ---
 

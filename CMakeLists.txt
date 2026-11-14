@@ -45,6 +45,7 @@ add_executable(unit-tests
     tests/analysis_tests.cpp
     tests/bfs_tests.cpp
     tests/bench_tests.cpp
+    tests/app_tests.cpp
 )
 
 target_include_directories(dep-analyzer PRIVATE src)

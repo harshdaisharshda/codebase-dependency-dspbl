@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — Codebase Dependency Analyzer
 
-**Status:** v2.9 — Decisions approved by the team (2026-11-07), Phase 4 review
+**Status:** v2.10 — Decisions approved by the team (2026-11-07), Phase 4 review
 rulings in §9 (2026-11-09), and Phase 5 planning rulings §9.19–25
 (2026-11-14). Phase 0–4 as-built (DS library `src/ds/`, DependencyGraph model
 `src/graph/dependency_graph.h`, scanning/parsing `src/io/`, analytics engine
@@ -27,6 +27,19 @@ applies to synthetic shapes only (the fixture deliberately contains the
 `cycle_a.h ↔ cycle_b.h` pair). Reproducibility verified: a second independent
 Release run produced identical values in every non-timing CSV column.
 Phase 5's earlier `results/` files are preserved untouched.
+
+**Phase 7 complete as-built (2026-11-15):** the terminal interface lives in
+`src/app/` (`app_context.h` state + tolerant parser, `menu_actions.h` nine
+option handlers, `menu.h` loop) with `main.cpp` as a shim — header-only so
+`tests/app_tests.cpp` drives the exact loop. All analytics call the existing
+engines (B1/B3/F3/F4/F5/F6/F7, Phase 5/6 benchmark runner →
+`results/menu_run/`); nothing is duplicated. One minimal API addition:
+`Trie::visitNodes` (read-only DFS diagnostic view, same precedent as
+`MaxHeap::rawEntryAt`) so option 8 can draw real trie branches. A Phase 0
+latent bug was fixed: `parseMenuChoice` read `line[digitStart - 1]`
+out-of-bounds for digit-leading input (caught by the new scripted tests under
+ASan). `F9` report saving is deferred — it is not in the approved Phase 7
+instruction list.
 
 > Note: the synopsis is a **Word document**, not the PDF initially referenced
 > (`docs/Project_Synopsis_Codebase_Dependency_Analyzer.docx`). The file is

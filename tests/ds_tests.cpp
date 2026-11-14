@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <string>
+#include <vector>
 
 #include "test_framework.h"
 
@@ -1111,6 +1112,83 @@ TEST(trie, stress_shared_prefixes_10k_names)
     trie.clear();
     CHECK_EQ(trie.size(), std::size_t{0});
     CHECK_EQ(trie.searchPrefix("util_string_").size(), std::size_t{0});
+}
+
+TEST(trie, visit_nodes_walks_the_real_branch_structure)
+{
+    ds::Trie trie;
+    trie.insert("api.h", 0);
+    trie.insert("api.h", 9); // duplicate basename: one terminal, two ids
+    trie.insert("api.cpp", 3);
+    trie.insert("app.cpp", 5);
+    trie.insert("util.h", 2);
+
+    // Collect (prefix, isTerminal, idCount) in DFS order. The walk must
+    // visit the root first, then the branch structure in child-edge order
+    // (children are kept in insertion order).
+    struct Row
+    {
+        std::string prefix;
+        bool terminal;
+        std::size_t ids;
+    };
+    std::vector<Row> rows;
+    trie.visitNodes([&rows](const std::string& prefix, const bool terminal,
+                            const ds::LinkedList<int>& ids) {
+        rows.push_back(Row{prefix, terminal, ids.size()});
+        return true;
+    });
+
+    // 20 nodes: root, a, ap, api, api., api.h, {api.c, api.cp, api.cpp},
+    // {app, app., app.c, app.cp, app.cpp}, {u, ut, uti, util, util., util.h}
+    CHECK_EQ(rows.size(), std::size_t{20});
+    CHECK_EQ(rows[0].prefix, std::string("")); // root, not terminal
+    CHECK(rows[0].terminal == false);
+    CHECK_EQ(rows[1].prefix, std::string("a"));
+    CHECK_EQ(rows[2].prefix, std::string("ap"));
+    CHECK_EQ(rows[3].prefix, std::string("api"));
+    CHECK(rows[3].terminal == false); // "api" itself is not a stored name
+    CHECK_EQ(rows[4].prefix, std::string("api."));
+    CHECK_EQ(rows[5].prefix, std::string("api.h")); // 'h' edge before 'c'
+    CHECK(rows[5].terminal == true);
+    CHECK_EQ(rows[5].ids, std::size_t{2}); // duplicate basename: ids 0 and 9
+    CHECK_EQ(rows[8].prefix, std::string("api.cpp"));
+    CHECK(rows[8].terminal == true);
+    CHECK_EQ(rows[8].ids, std::size_t{1});
+    CHECK_EQ(rows[9].prefix, std::string("app")); // app branch after api's
+    CHECK_EQ(rows[13].prefix, std::string("app.cpp"));
+    CHECK(rows[13].terminal == true);
+    CHECK_EQ(rows[14].prefix, std::string("u")); // second root branch
+    CHECK_EQ(rows[19].prefix, std::string("util.h"));
+    CHECK(rows[19].terminal == true);
+    CHECK_EQ(rows[19].ids, std::size_t{1});
+
+    // Returning false short-circuits the walk (root only).
+    int visits = 0;
+    trie.visitNodes([&visits](const std::string&, const bool,
+                              const ds::LinkedList<int>&) {
+        ++visits;
+        return false;
+    });
+    CHECK_EQ(visits, 1);
+
+    // Moved-from trie walks nothing (nullptr root), no crash.
+    ds::Trie moved = std::move(trie);
+    visits = 0;
+    trie.visitNodes([&visits](const std::string&, const bool,
+                              const ds::LinkedList<int>&) {
+        ++visits;
+        return true;
+    });
+    CHECK_EQ(visits, 0);
+    // The destination still walks the full structure.
+    visits = 0;
+    moved.visitNodes([&visits](const std::string&, const bool,
+                               const ds::LinkedList<int>&) {
+        ++visits;
+        return true;
+    });
+    CHECK_EQ(visits, 20);
 }
 
 // ===========================================================================
