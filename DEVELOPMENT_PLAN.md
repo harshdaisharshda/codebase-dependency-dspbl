@@ -245,22 +245,55 @@ exact).
 
 ---
 
-## Phase 6 — Benchmarking suite (**instructor addendum**)  *(1 session) — RESCOPED 2026-11-14*
+## Phase 6 — Benchmarking suite (**instructor addendum**)  *(1 session) — RESCOPED 2026-11-14; DONE 2026-11-15*
 
 Generators, runner discipline, counters and CSV now ship with Phase 5
 (ruling §9.24). Phase 6 keeps only the final deliverables:
 
-- [ ] Freeze benchmarks: final frozen run on all 15 synthetic graphs
+- [x] Freeze benchmarks: final frozen run on all 15 synthetic graphs
       (5 shapes × 1k/5k/10k) + the scanned fixture; record environment
       (machine, build type, flags) into the CSV meta/report.
-- [ ] Confirm results/ CSV schema docs match the as-built writer.
-- [ ] Results committed only from real runs; TASK_LOG records machine/setup.
+      **Done 2026-11-15**: `results/frozen/` (raw 1120 rows, summary 112
+      rows, env record) — dedicated directory, Phase 5's `results/` files
+      untouched. The fixture runs as its own case (`fixture_sample_project`,
+      seed column 0), same deterministic endpoint rules as the synthetic
+      cases. Frozen-run means: dense/10000 B1 144.8 µs vs B6 94.5 µs;
+      chain/10000 B3 bidirectional 452.5 µs vs classic baseline 546.5 µs;
+      B6 `bottomUpLevels = 0` on all 16 instances (pull never fired — honest
+      limitation, see ARCHITECTURE §6).
+- [x] Confirm results/ CSV schema docs match the as-built writer.
+      Schema v1 verified field-by-field: raw 14 columns × 1121 lines,
+      summary 18 columns × 113 lines, no malformed rows, mean ∈ [min, max]
+      on all 112 summary rows.
+- [x] Results committed only from real runs; TASK_LOG records machine/setup
+      (Apple M5, arm64, 10 cores, macOS 26.6.2, Apple LLVM 21.0.0).
 
-Exit criteria
-- Sanity: counters on the fixture graph match the unit-tested exact values;
-  timing values plausible (>0, scale with size on the largest dense case) —
-  **smoke check only; no timing assertions**.
-- Environment recorded; no invented numbers anywhere.
+Reproducibility verification (2026-11-15): a second independent Release run
+(`results/frozen_verify`, since deleted) produced **identical values in every
+non-timing column** of both CSVs — schema, graph metadata, seeds, variant,
+bound, trial and all four counters (fixture counters included). Timings are
+the only columns that vary, as expected.
+
+Runner corrections made in Phase 6 (genuine issues, documented):
+1. **Asserts active in the bench binary** — `-UNDEBUG` for the `bench`
+   target only: the runner's correctness checks (acyclicity of synthetic
+   shapes, B3-reachability agreement, counter drift across trials) previously
+   compiled out under `NDEBUG`, i.e. they did NOT run where the results are
+   produced. All checks sit outside the timed region.
+2. **Acyclicity validation scoped to synthetic shapes** — the Debug run
+   caught that the bundled fixture deliberately contains the
+   `cycle_a.h ↔ cycle_b.h` pair; scanned projects are NOT assumed acyclic.
+   BFS handles cycles via discovery guards (asserted since Phase 5.1), so
+   the cyclic fixture is valid benchmark input; the B3 reachability-agreement
+   check applies to every case.
+3. **Build type recorded from CMake** — after (1), `#ifdef NDEBUG` could no
+   longer serve as a Release/Debug proxy inside bench sources; the env record
+   now gets `BENCH_BUILD_TYPE`/`BENCH_OPT_FLAGS` from CMake verbatim.
+
+Exit criteria — **all met**: fixture counters match the unit-tested exact
+values (B1 3 visited / 2 edges / frontier 2; B2 5/3/3; B3 4/3/3); timings
+plausible (>0, scale with size on the largest dense case); environment
+recorded; no invented numbers anywhere.
 
 ---
 

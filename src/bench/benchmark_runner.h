@@ -24,17 +24,25 @@
 //   Determinism : all six variants are deterministic, so counters must be
 //                 IDENTICAL across trials — the runner asserts this (a
 //                 mismatch would be a bug, not noise).
-//   Output      : results/benchmarks_raw.csv (one row per trial) +
-//                 results/benchmarks_summary.csv (one row per variant×graph)
-//                 + results/benchmark_env.txt (environment record). Schema
-//                 version 1 (columns documented in DEVELOPMENT_PLAN.md).
+//   Output      : <outputDir>/benchmarks_raw.csv (one row per trial) +
+//                 <outputDir>/benchmarks_summary.csv (one row per
+//                 variant×graph) + <outputDir>/benchmark_env.txt (environment
+//                 record). Schema version 1 (columns documented in
+//                 ARCHITECTURE §6). Pass results/frozen for the final frozen
+//                 run — earlier runs' files are never overwritten.
+//   Fixture     : the real scanned sample project runs as its own case
+//                 (Phase 6), same endpoint rules, seed column 0.
 //
 // Honesty rule (AGENTS.md): every published number comes from these real
-// runs; the runner writes only what it measured.
+// runs; the runner writes only what it measured. The bench target keeps
+// asserts ACTIVE under Release (-UNDEBUG) so the correctness checks —
+// acyclicity, B3-reachability agreement, counter-drift — execute where the
+// results are produced; every check sits outside the timed region.
 
 #include "bench/graph_generators.h"
 #include "graph/analysis.h"
 #include "graph/bfs.h"
+#include "io/project_scanner.h"
 
 #include <algorithm>
 #include <cassert>
@@ -117,16 +125,20 @@ struct CaseSetup
     bool pathExists = false; // validated once, untimed
 };
 
-// Builds one case: graph + untimed seed selection + untimed validation.
-inline CaseSetup buildCase(const Shape shape, const int nodes,
-                           const std::uint64_t seed)
+// Fills the deterministic endpoint selection + untimed correctness
+// validation shared by synthetic and scanned cases (asserts active even in
+// the Release bench binary — see CMakeLists -UNDEBUG note).
+//
+// `requireAcyclic` is true for the synthetic shapes (acyclic by
+// construction) and FALSE for scanned projects: the bundled fixture
+// deliberately contains the cycle_a.h ↔ cycle_b.h pair the Phase 2/4 cycle
+// tests rely on. BFS variants handle cycles via discovery guards (asserted
+// since Phase 5.1), so cyclic real-world graphs are valid benchmark input.
+inline void finishCase(CaseSetup& setup, const bool requireAcyclic)
 {
-    CaseSetup setup;
-    setup.data.kind = shapeName(shape);
-    setup.data.nodes = nodes;
-    setup.data.seed = seed;
-    generateGraph(shape, nodes, seed, setup.data.graph);
     graph::DependencyGraph& g = setup.data.graph;
+    const int nodes = g.nodeCount();
+    assert(nodes >= 1 && "finishCase: empty benchmark graph");
 
     // Traversal seed: middle node. Second B2 seed: the biggest hub.
     setup.data.center = nodes / 2;
@@ -154,15 +166,53 @@ inline CaseSetup buildCase(const Shape shape, const int nodes,
             to = id;
         }
     setup.data.pathTo = to;
+    setup.data.nodes = nodes;
 
-    // Untimed correctness validation: all shapes acyclic, and the two
-    // pathfinders must agree on reachability for the chosen pair.
-    const analysis::CycleReport cycles = analysis::findCycles(g);
-    assert(cycles.hasCycles == false && "benchmark graph must be acyclic");
+    // Untimed correctness validation: synthetic shapes are acyclic by
+    // construction (assert); scanned projects are NOT assumed acyclic. For
+    // every case the two pathfinders must agree on reachability for the
+    // chosen pair.
+    if (requireAcyclic)
+    {
+        const analysis::CycleReport cycles = analysis::findCycles(g);
+        assert(cycles.hasCycles == false &&
+               "synthetic benchmark graph must be acyclic");
+    }
     setup.pathExists =
         analysis::dependencyPath(g, from, to).found ==
         bfs::bidirectionalPath(g, from, to).found;
     assert(setup.pathExists && "B3 baselines disagree on reachability");
+}
+
+// Builds one synthetic case: graph + untimed seed selection + validation.
+inline CaseSetup buildCase(const Shape shape, const int nodes,
+                           const std::uint64_t seed)
+{
+    CaseSetup setup;
+    setup.data.kind = shapeName(shape);
+    setup.data.seed = seed;
+    generateGraph(shape, nodes, seed, setup.data.graph);
+    finishCase(setup, /*requireAcyclic=*/true);
+    return setup;
+}
+
+// Builds the scanned-fixture case (Phase 6): the REAL sample project graph,
+// same deterministic endpoint rules, `seed` column 0 = "not synthetic".
+inline CaseSetup buildFixtureCase(const std::string& fixtureRoot)
+{
+    CaseSetup setup;
+    setup.data.kind = "fixture_sample_project";
+    setup.data.seed = 0;
+    io::ScanSummary scan;
+    std::vector<io::ResolutionIssue> issues;
+    std::vector<std::string> warnings;
+    const bool scanned =
+        io::scanProject(fixtureRoot, setup.data.graph, scan, issues, warnings);
+    assert(scanned && "buildFixtureCase: fixture project failed to scan");
+    (void)scanned; // unused under NDEBUG (project pattern, Phase 4)
+    assert(setup.data.graph.isFinalized() &&
+           "buildFixtureCase: scanner left the graph unfinalized");
+    finishCase(setup, /*requireAcyclic=*/false);
     return setup;
 }
 
@@ -270,15 +320,171 @@ inline std::string timestampIso()
 
 inline const char* buildType()
 {
-#ifdef NDEBUG
+    // Real config from CMake — NDEBUG is undefine'd in bench (-UNDEBUG), so
+    // it must NOT be used as a build-type proxy here.
+#ifdef BENCH_BUILD_TYPE
+    return BENCH_BUILD_TYPE;
+#elif defined(NDEBUG)
     return "Release";
 #else
     return "Debug";
 #endif
 }
 
-// Runs the full approved matrix and writes raw + summary CSVs.
-// Returns the number of timed trials executed (for the stdout footer).
+inline const char* optFlags()
+{
+#ifdef BENCH_OPT_FLAGS
+    return BENCH_OPT_FLAGS;
+#else
+    return "unknown";
+#endif
+}
+
+inline const char* cpuArch()
+{
+#if defined(__aarch64__) || defined(__arm64__)
+    return "arm64";
+#elif defined(__x86_64__) || defined(__amd64__) || defined(__i386__)
+    return "x86_64";
+#else
+    return "unknown";
+#endif
+}
+
+// The bench target deliberately undefines NDEBUG (CMakeLists -UNDEBUG):
+// the runner's correctness checks MUST execute where the results are
+// produced. Unit-tests keep the normal config behaviour.
+inline const char* assertState()
+{
+#ifdef NDEBUG
+    return "disabled (NDEBUG)";
+#else
+    return "active (correctness checks execute)";
+#endif
+}
+
+// Runs the warm-up + 10-trial rotated loop for ONE case and emits its raw +
+// summary rows. `seedCell` is the CSV seed column ("0" for the scanned
+// fixture = not synthetic). Graph construction and validation happened
+// before this call (untimed). Returns the number of timed trials executed.
+inline std::size_t measureCase(const GraphCase& data,
+                               const std::string& seedCell,
+                               const std::string& stamp,
+                               const std::string& schema,
+                               std::ofstream& raw, std::ofstream& summary,
+                               const Variant* baseOrder,
+                               const int kVariantCount, const int kTrials)
+{
+    const std::string label = data.kind + "/" + std::to_string(data.nodes);
+    std::cout << "[" << label << "] V=" << data.graph.nodeCount()
+              << " E=" << data.graph.edgeCount() << " path "
+              << data.pathFrom << "->" << data.pathTo << "\n";
+
+    // Per-variant trial storage: samples[variantIndex][trial].
+    std::vector<std::vector<double>> times(kVariantCount);
+    std::vector<std::vector<Sample>> samples(kVariantCount);
+    for (int v = 0; v < kVariantCount; ++v)
+    {
+        times[v].reserve(kTrials);
+        samples[v].reserve(kTrials);
+    }
+
+    // Warm-up round: every variant once, discarded (also acts as a
+    // determinism baseline for the counter assertion below).
+    std::vector<Sample> baseline(kVariantCount);
+    for (int v = 0; v < kVariantCount; ++v)
+        baseline[v] = runVariant(baseOrder[v], data);
+
+    std::size_t timedCalls = 0;
+    for (int trial = 0; trial < kTrials; ++trial)
+    {
+        // Rotated order per trial: spreads cache/allocator effects.
+        for (int slot = 0; slot < kVariantCount; ++slot)
+        {
+            const int v = (trial + slot) % kVariantCount;
+            const Variant variant = baseOrder[v];
+            const auto start = std::chrono::steady_clock::now();
+            const Sample s = runVariant(variant, data);
+            const auto end = std::chrono::steady_clock::now();
+            // Deterministic variants: counters must not drift. This check
+            // sits OUTSIDE the timed region and runs in the bench binary
+            // (asserts kept active there — see assertState()).
+            assert(s.verticesVisited == baseline[v].verticesVisited &&
+                   s.edgesExamined == baseline[v].edgesExamined &&
+                   s.maxFrontier == baseline[v].maxFrontier &&
+                   "counters drifted across trials");
+            times[v].push_back(
+                std::chrono::duration<double, std::micro>(end - start)
+                    .count());
+            samples[v].push_back(s);
+            ++timedCalls;
+        }
+    }
+
+    // Emit rows.
+    for (int v = 0; v < kVariantCount; ++v)
+    {
+        const int bound =
+            baseOrder[v] == Variant::B5Bounded ? static_cast<int>(kBenchBound)
+                                               : 0;
+        for (int trial = 0; trial < kTrials; ++trial)
+        {
+            const Sample& s = samples[v][trial];
+            raw << schema << ',' << stamp << ',' << data.kind << ','
+                << data.nodes << ',' << data.graph.edgeCount() << ','
+                << seedCell << ',' << variantName(baseOrder[v]) << ','
+                << bound << ',' << trial << ',' << std::fixed
+                << std::setprecision(3) << times[v][trial] << ','
+                << s.verticesVisited << ',' << s.edgesExamined << ','
+                << s.maxFrontier << ',' << s.modeSwitches << '\n';
+        }
+        raw << std::defaultfloat; // not needed after setprecision reset
+        raw.unsetf(std::ios::fixed);
+
+        const Stats stats = summarize(times[v]);
+        const Sample& s = samples[v].front();
+        summary << schema << ',' << stamp << ',' << data.kind << ','
+                << data.nodes << ',' << data.graph.edgeCount() << ','
+                << seedCell << ',' << variantName(baseOrder[v]) << ','
+                << bound << ",8," << std::fixed << std::setprecision(3)
+                << stats.mean << ',' << stats.median << ',' << stats.stdev
+                << ',' << stats.min << ',' << stats.max << ','
+                << s.verticesVisited << ',' << s.edgesExamined << ','
+                << s.maxFrontier << ',' << s.modeSwitches << '\n';
+        summary.unsetf(std::ios::fixed);
+        std::cout << "  " << std::left << std::setw(24)
+                  << variantName(baseOrder[v]) << " mean " << std::right
+                  << std::setw(10) << std::fixed << std::setprecision(1)
+                  << stats.mean << " us  (n=" << s.verticesVisited
+                  << ", e=" << s.edgesExamined << ", f=" << s.maxFrontier;
+        if (baseOrder[v] == Variant::B6DirectionOptimizing)
+            std::cout << ", pull=" << s.modeSwitches;
+        std::cout << ")\n";
+        std::cout.unsetf(std::ios::fixed);
+    }
+    return timedCalls;
+}
+
+// Locates tests/fixtures/sample_project walking up from the CWD (same
+// discipline as the unit tests; the bench binary may run from anywhere).
+inline std::string locateFixtureRoot()
+{
+    std::filesystem::path current = std::filesystem::current_path();
+    for (int depth = 0; depth < 8; ++depth)
+    {
+        const std::filesystem::path candidate =
+            current / "tests/fixtures/sample_project";
+        if (std::filesystem::is_directory(candidate))
+            return candidate.string();
+        if (!current.has_parent_path())
+            break;
+        current = current.parent_path();
+    }
+    return std::string();
+}
+
+// Runs the full approved matrix + the scanned-fixture case and writes raw +
+// summary CSVs. Returns the number of timed trials executed.
 inline std::size_t runBenchmarkSuite(const std::string& outputDir)
 {
     constexpr std::uint64_t kBaseSeed = 20261115;
@@ -314,8 +520,14 @@ inline std::size_t runBenchmarkSuite(const std::string& outputDir)
         std::ofstream env(outputDir + "/benchmark_env.txt");
         env << "timestamp: " << stamp << "\nbuild: " << buildType()
             << "\ncompiler: " << __VERSION__ << "\nstandard: C++17\n"
+            << "arch: " << cpuArch()
+            << "\noptimization: " << optFlags()
+            << "\nasserts: " << assertState()
+            << "\noutput_dir: " << outputDir << "\n"
             << "methodology: warmup 1 + 10 trials, drop min/max, stats over 8; "
-               "rotated variant order; steady_clock; single-threaded\n";
+               "rotated variant order; steady_clock; single-threaded\n"
+            << "cases: 5 shapes x {1000,5000,10000} + scanned fixture "
+               "tests/fixtures/sample_project\n";
     }
 
     std::size_t timedCalls = 0;
@@ -327,97 +539,27 @@ inline std::size_t runBenchmarkSuite(const std::string& outputDir)
                 kBaseSeed + static_cast<std::uint64_t>(nodes) * 1000 +
                 static_cast<std::uint64_t>(static_cast<int>(shape));
             const CaseSetup setup = buildCase(shape, nodes, seed);
-            const GraphCase& data = setup.data;
-            const std::string label =
-                data.kind + "/" + std::to_string(nodes);
-            std::cout << "[" << label << "] V=" << data.graph.nodeCount()
-                      << " E=" << data.graph.edgeCount() << " path "
-                      << data.pathFrom << "->" << data.pathTo << "\n";
-
-            // Per-variant trial storage: samples[variantIndex][trial].
-            std::vector<std::vector<double>> times(kVariantCount);
-            std::vector<std::vector<Sample>> samples(kVariantCount);
-            for (int v = 0; v < kVariantCount; ++v)
-            {
-                times[v].reserve(kTrials);
-                samples[v].reserve(kTrials);
-            }
-
-            // Warm-up round: every variant once, discarded (also acts as a
-            // determinism baseline for the counter assertion below).
-            std::vector<Sample> baseline(kVariantCount);
-            for (int v = 0; v < kVariantCount; ++v)
-                baseline[v] = runVariant(baseOrder[v], data);
-
-            for (int trial = 0; trial < kTrials; ++trial)
-            {
-                // Rotated order per trial: spreads cache/allocator effects.
-                for (int slot = 0; slot < kVariantCount; ++slot)
-                {
-                    const int v = (trial + slot) % kVariantCount;
-                    const Variant variant = baseOrder[v];
-                    const auto start = std::chrono::steady_clock::now();
-                    const Sample s = runVariant(variant, data);
-                    const auto end = std::chrono::steady_clock::now();
-                    // Deterministic variants: counters must not drift.
-                    assert(s.verticesVisited == baseline[v].verticesVisited &&
-                           s.edgesExamined == baseline[v].edgesExamined &&
-                           s.maxFrontier == baseline[v].maxFrontier &&
-                           "counters drifted across trials");
-                    times[v].push_back(
-                        std::chrono::duration<double, std::micro>(end - start)
-                            .count());
-                    samples[v].push_back(s);
-                    ++timedCalls;
-                }
-            }
-
-            // Emit rows.
-            for (int v = 0; v < kVariantCount; ++v)
-            {
-                const int bound =
-                    baseOrder[v] == Variant::B5Bounded
-                        ? static_cast<int>(kBenchBound)
-                        : 0;
-                for (int trial = 0; trial < kTrials; ++trial)
-                {
-                    const Sample& s = samples[v][trial];
-                    raw << schema << ',' << stamp << ',' << data.kind << ','
-                        << nodes << ',' << data.graph.edgeCount() << ','
-                        << seed << ',' << variantName(baseOrder[v]) << ','
-                        << bound << ',' << trial << ','
-                        << std::fixed << std::setprecision(3)
-                        << times[v][trial] << ',' << s.verticesVisited << ','
-                        << s.edgesExamined << ',' << s.maxFrontier << ','
-                        << s.modeSwitches << '\n';
-                }
-                raw << std::defaultfloat; // not needed after setprecision reset
-                raw.unsetf(std::ios::fixed);
-
-                const Stats stats = summarize(times[v]);
-                const Sample& s = samples[v].front();
-                summary << schema << ',' << stamp << ',' << data.kind << ','
-                        << nodes << ',' << data.graph.edgeCount() << ',' << seed
-                        << ',' << variantName(baseOrder[v]) << ',' << bound
-                        << ",8," << std::fixed << std::setprecision(3)
-                        << stats.mean << ',' << stats.median << ','
-                        << stats.stdev << ',' << stats.min << ',' << stats.max
-                        << ',' << s.verticesVisited << ',' << s.edgesExamined
-                        << ',' << s.maxFrontier << ',' << s.modeSwitches
-                        << '\n';
-                summary.unsetf(std::ios::fixed);
-                std::cout << "  " << std::left << std::setw(24)
-                          << variantName(baseOrder[v]) << " mean "
-                          << std::right << std::setw(10) << std::fixed
-                          << std::setprecision(1) << stats.mean << " us  (n="
-                          << s.verticesVisited << ", e=" << s.edgesExamined
-                          << ", f=" << s.maxFrontier;
-                if (baseOrder[v] == Variant::B6DirectionOptimizing)
-                    std::cout << ", pull=" << s.modeSwitches;
-                std::cout << ")\n";
-                std::cout.unsetf(std::ios::fixed);
-            }
+            timedCalls += measureCase(
+                setup.data, std::to_string(seed), stamp, schema, raw, summary,
+                baseOrder, kVariantCount, kTrials);
         }
+    }
+
+    // Phase 6: the REAL scanned project as its own case (ruling §9.26).
+    // Missing fixture → warning + skip, never a fatal error (AGENTS §6).
+    const std::string fixtureRoot = locateFixtureRoot();
+    if (fixtureRoot.empty())
+    {
+        std::cout
+            << "warning: tests/fixtures/sample_project not found from CWD — "
+               "fixture case skipped\n";
+    }
+    else
+    {
+        const CaseSetup setup = buildFixtureCase(fixtureRoot);
+        timedCalls +=
+            measureCase(setup.data, "0", stamp, schema, raw, summary,
+                        baseOrder, kVariantCount, kTrials);
     }
     return timedCalls;
 }

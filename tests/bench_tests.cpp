@@ -5,10 +5,12 @@
 // binary exercises the full 1k/5k/10k matrix.
 
 #include "bench/graph_generators.h"
+#include "bench/benchmark_runner.h"
 #include "graph/analysis.h"
 #include "graph/bfs.h"
 #include "graph/dependency_graph.h"
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -181,4 +183,52 @@ TEST(generators, tree_is_an_arborescence_rooted_at_node_zero)
     // from a leaf would only visit that leaf's subtree.
     const bfs::TraversalReport r = bfs::exploreReverse(g, 0);
     CHECK_EQ(r.counters.verticesVisited, std::size_t{n});
+}
+
+// ===========================================================================
+// Phase 6 — the scanned fixture as a benchmark case
+// ===========================================================================
+
+TEST(fixture_case, scanned_project_endpoints_deterministic_and_valid)
+{
+    // Same upward walk as the integration tests (bench may run from a
+    // build/<config> subdirectory).
+    std::string fixtureRoot;
+    {
+        std::filesystem::path current = std::filesystem::current_path();
+        for (int depth = 0; depth < 8 && fixtureRoot.empty(); ++depth)
+        {
+            const std::filesystem::path candidate =
+                current / "tests/fixtures/sample_project";
+            if (std::filesystem::is_directory(candidate))
+                fixtureRoot = candidate.string();
+            else if (current.has_parent_path())
+                current = current.parent_path();
+            else
+                break;
+        }
+    }
+    CHECK(!fixtureRoot.empty());
+
+    const bench::CaseSetup setup = bench::buildFixtureCase(fixtureRoot);
+    const graph::DependencyGraph& g = setup.data.graph;
+    CHECK(g.isFinalized());
+    CHECK_EQ(g.nodeCount(), 12);  // fixture totals asserted since Phase 3
+    CHECK_EQ(g.edgeCount(), std::size_t{9});
+    CHECK_EQ(setup.data.kind, std::string("fixture_sample_project"));
+    CHECK_EQ(setup.data.seed, std::uint64_t{0}); // seed column 0 = scanned
+    CHECK_EQ(setup.data.nodes, 12);
+    CHECK(setup.data.center >= 0 && setup.data.center < 12);
+    CHECK(setup.data.hub >= 0 && setup.data.hub < 12);
+    CHECK(setup.data.pathFrom >= 0 && setup.data.pathFrom < 12);
+    CHECK(setup.data.pathTo >= 0 && setup.data.pathTo < 12);
+    CHECK(setup.pathExists); // B3 baselines agreed on reachability
+
+    // The endpoint rules are pure functions of the graph → rebuilding the
+    // case must pick identical endpoints (reproducibility contract).
+    const bench::CaseSetup again = bench::buildFixtureCase(fixtureRoot);
+    CHECK_EQ(again.data.center, setup.data.center);
+    CHECK_EQ(again.data.hub, setup.data.hub);
+    CHECK_EQ(again.data.pathFrom, setup.data.pathFrom);
+    CHECK_EQ(again.data.pathTo, setup.data.pathTo);
 }

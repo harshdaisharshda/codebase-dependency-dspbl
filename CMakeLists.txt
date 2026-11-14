@@ -51,6 +51,26 @@ target_include_directories(dep-analyzer PRIVATE src)
 target_include_directories(bench PRIVATE src)
 target_include_directories(unit-tests PRIVATE src)
 
+# Phase 6: the bench binary keeps asserts ACTIVE in Release (-UNDEBUG comes
+# after the config flags, so it wins over -DNDEBUG). The runner's correctness
+# checks (acyclicity of synthetic shapes, B3-reachability agreement, counter
+# drift across trials) must execute where the benchmark results are produced;
+# all of them sit outside the timed region, so timings stay honest.
+# Unit-tests/dep-analyzer keep the normal per-config behaviour.
+target_compile_options(bench PRIVATE -UNDEBUG)
+# The env record must report the REAL config (NDEBUG is undefine'd above, so
+# it can no longer serve as a Release/Debug proxy inside bench sources).
+# Passed as raw compile options because the values contain spaces.
+target_compile_options(bench PRIVATE
+    "-DBENCH_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\"")
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    target_compile_options(bench PRIVATE
+        "-DBENCH_OPT_FLAGS=\"-O3 (CMake Release default) + -UNDEBUG\"")
+else()
+    target_compile_options(bench PRIVATE
+        "-DBENCH_OPT_FLAGS=\"no -O (CMake Debug default) + ASan/UBSan\"")
+endif()
+
 set_project_warnings(dep-analyzer)
 set_project_warnings(bench)
 set_project_warnings(unit-tests)
