@@ -1,6 +1,9 @@
 # Build artifacts / outputs — do not commit (AGENTS.md; DEVELOPMENT_PLAN Phase 0)
 build/
-results/
+# Generated results stay out — EXCEPT the frozen Phase 6 benchmark record,
+# which is the citable, reproducible record (real runs, never invented numbers).
+results/*
+!results/frozen/
 .DS_Store
 cmake-build-debug/
 cmake-build-release/

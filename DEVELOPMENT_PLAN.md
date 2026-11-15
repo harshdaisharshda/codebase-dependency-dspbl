@@ -350,18 +350,25 @@ Release; 0 warnings at `-Wall -Wextra`.
 
 ---
 
-## Phase 8 — Testing, documentation, submission prep  *(2–3 sessions) — PENDING*
+## Phase 8 — Testing, documentation, submission prep  *(2–3 sessions) — DONE (2026-11-15)*
 
-- [ ] Full unit test suite audit; add anything missing per TESTING_STRATEGY.md checklist.
-- [ ] Integration test: one per synopsis feature on the fixture (already in Phase 4)
-      + at least one **menu scripted flow** test.
-- [ ] Update README with build/run/test/benchmark instructions.
-- [ ] Freeze benchmarks: run final suite, record environment in TASK_LOG; results
-      committed only from real runs.
-- [ ] Final documentation pass: ARCHITECTURE.md reflects **as-built**; sync
-      open-questions resolutions; viva demo narrative (which DS answers which feature).
-- [ ] viva dry-run: each teammate can explain their modules' DS choices; both team
-      members can run both binaries blind.
+- [x] Full unit test suite audit — 181 tests / 54 334 checks green in Debug
+      (ASan/UBSan) and Release after `--clean-first` rebuilds; 0 warnings in
+      both configs; clean-directory CMake configure + build verified.
+- [x] Integration tests per synopsis feature + menu scripted flows — already in
+      place from Phases 4/7 (`tests/app_tests.cpp`); re-verified by a scripted
+      walkthrough of all nine menu options against the fixture (see TASK_LOG).
+- [x] README.md created (build/run, all nine options, DS + algorithm + BFS
+      tables, benchmark methodology, testing, limitations).
+- [x] Benchmarks frozen in Phase 6 (`results/frozen/`); Phase 8 re-verified
+      integrity by SHA-256 before/after a menu option-9 run — byte-identical.
+- [x] Final documentation pass: ARCHITECTURE.md §7 rewritten as-built,
+      F9 wording corrected to "deferred, not implemented" (§2.3/§4),
+      status bumped v2.11; DEVELOPMENT_PLAN Definition of Done no longer
+      claims optional F9; SUBMISSION_NOTES.md (sections A–F) and
+      explanation.md (personal study guide) created.
+- [x] Viva/demo prep: SUBMISSION_NOTES §E (menu demo sequence) and §F
+      (Q&A); explanation.md §9 (30-second explanation).
 
 Exit criteria — "Definition of Done" checklist (below) all ☑.
 
@@ -369,8 +376,9 @@ Exit criteria — "Definition of Done" checklist (below) all ☑.
 
 ## Definition of Done (project-level)
 
-- All 8 synopsis features (incl. optional F9) work on the fixture project and the
-  menu loads them from a real project folder.
+- All 8 synopsis features work on the fixture project and the menu loads them
+  from a real project folder. (Optional F9 report saving is **deferred** —
+  not part of the delivered scope; documented in ARCHITECTURE §9/§1.)
 - Six BFS variations implemented, equivalence-tested, benchmarked; CSV exists.
 - Zero compiler warnings (`-Wall -Wextra`), zero ASan/UBSan findings, green
   `unit-tests` in Debug & Release.

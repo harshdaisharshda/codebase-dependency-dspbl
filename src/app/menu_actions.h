@@ -63,8 +63,11 @@ inline int pickFile(const AppState& state, std::istream& in,
     out << "  " << prompt
         << " (path, or basename prefix; empty line = cancel): ";
     std::string line;
-    if (!std::getline(in, line) || line.empty())
+    if (!std::getline(in, line))
         return -1;
+    trimWhitespace(line);
+    if (line.empty())
+        return -1; // whitespace-only input = cancel, as the prompt promises
 
     int id = -1;
     if (state.graph.findId(line, id))
@@ -89,7 +92,10 @@ inline int pickFile(const AppState& state, std::istream& in,
     {
         out << "  Select 1-" << matches.size()
             << " (empty line = cancel): ";
-        if (!std::getline(in, line) || line.empty())
+        if (!std::getline(in, line))
+            return -1;
+        trimWhitespace(line);
+        if (line.empty())
             return -1;
         int choice = 0;
         if (parseMenuChoice(line, choice) && choice >= 1 &&
@@ -135,6 +141,7 @@ inline void scanProjectMenu(AppState& state, std::istream& in,
     std::string path;
     if (!std::getline(in, path))
         return;
+    trimWhitespace(path);
     if (path.empty())
     {
         const std::string fixtureRoot = bench::locateFixtureRoot();
@@ -318,7 +325,10 @@ inline void prefixSearchMenu(const AppState& state, std::istream& in,
         return;
     out << "  Filename prefix (empty line = cancel): ";
     std::string prefix;
-    if (!std::getline(in, prefix) || prefix.empty())
+    if (!std::getline(in, prefix))
+        return;
+    trimWhitespace(prefix);
+    if (prefix.empty())
         return;
 
     const ds::Trie nameIndex = analysis::buildNameIndex(state.graph);

@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — Codebase Dependency Analyzer
 
-**Status:** v2.10 — Decisions approved by the team (2026-11-07), Phase 4 review
+**Status:** v2.11 — Decisions approved by the team (2026-11-07), Phase 4 review
 rulings in §9 (2026-11-09), and Phase 5 planning rulings §9.19–25
 (2026-11-14). Phase 0–4 as-built (DS library `src/ds/`, DependencyGraph model
 `src/graph/dependency_graph.h`, scanning/parsing `src/io/`, analytics engine
@@ -14,7 +14,7 @@ variants — shared core behind B1/B2/B4/B5 (`explore`, `exploreMultiSource`,
 shapes, acyclic by construction), `src/bench/benchmark_runner.h` +
 `src/bench/bench_main.cpp` (`bench` binary; warm-up + 10 trials, rotated
 variant order, drop min/max, counter-drift assertion; raw + summary CSV,
-schema v1 — columns below in §6). Menu integration remains Phase 7.
+schema v1 — columns below in §6). Menu integration shipped in Phase 7.
 
 **Phase 6 complete as-built (2026-11-15):** final frozen benchmark run in
 `results/frozen/` — 15 synthetic graphs + the real scanned fixture
@@ -40,6 +40,24 @@ latent bug was fixed: `parseMenuChoice` read `line[digitStart - 1]`
 out-of-bounds for digit-leading input (caught by the new scripted tests under
 ASan). `F9` report saving is deferred — it is not in the approved Phase 7
 instruction list.
+
+**Phase 8 complete (2026-11-15):** documentation consistency audit and
+submission prep — `README.md`, `SUBMISSION_NOTES.md`, `explanation.md`
+created; stale as-built claims corrected (§7 structure, F9 wording); feature
+set frozen at `cef44d6`. Final audit passed: clean-first Debug & Release
+builds with 0 warnings, 181 tests / 54 334 checks green in both, scripted
+nine-option menu walkthrough matches all documented fixture numbers,
+`results/frozen/` verified byte-identical (SHA-256) around a fresh option-9
+run. Nothing committed — awaiting user review.
+
+**Post-Phase-8 fix (2026-11-15, user-reported from a real `fmt` scan):** pasted
+leading/trailing whitespace broke every file pick — the shared
+`trimWhitespace` helper (in `app_context.h`, spaces/tabs/CRLF-`\r`-safe) is now
+applied to the menu choice, file picker (both prompts), option 6 prefix, and
+option 1 directory; whitespace-only input counts as empty wherever a prompt
+cancels or defaults. +7 regression tests in `tests/app_tests.cpp`; the suite
+now stands at 188 tests / 54 364 checks green in Debug (ASan/UBSan) and
+Release, 0 warnings.
 
 > Note: the synopsis is a **Word document**, not the PDF initially referenced
 > (`docs/Project_Synopsis_Codebase_Dependency_Analyzer.docx`). The file is
@@ -113,7 +131,8 @@ The console output must be able to show this indented tree/levels form.
 ### 2.3 Topics the synopsis commits us to
 
 Graph algorithms · **Recursion** (DFS, cycle detection, deepest chain) ·
-**File handling** (read sources, parse includes, optionally save reports) ·
+**File handling** (read sources, parse includes; F9 report saving is an
+optional synopsis item — **deferred, not implemented**) ·
 Standard I/O · **Menu-driven** UI.
 
 > Implementation note (**approved decision**): the synopsis lists *Recursion* as a
@@ -176,7 +195,7 @@ Standard I/O · **Menu-driven** UI.
 
 ```
 ┌────────────────────────────── Console application ───────────────────────────────┐
-│  Menu UI (cin/cout, feature selection, trees/levels output, report saving)       │
+│  Menu UI (cin/cout, feature selection, trees/levels output)                      │
 ├─────────────────────────────────────┬────────────────────────────────────────────┤
 │  Scanning & Parsing                 │  Analytics engines                         │
 │  walk project tree (filesystem)     │  cycle detection (DFS+Stack, SCC)          │
@@ -309,27 +328,31 @@ reproduced every non-timing CSV column identically.
 
 ---
 
-## 7. Planned folder structure (no code yet)
+## 7. Folder structure (as-built, Phase 8)
 
 ```
 dsproject/
 ├── AGENTS.md ARCHITECTURE.md DEVELOPMENT_PLAN.md TESTING_STRATEGY.md TASK_LOG.md
+├── README.md SUBMISSION_NOTES.md explanation.md   # Phase 8 docs
 ├── docs/                       # synopsis DOCX (original file, unchanged)
-├── CMakeLists.txt              # or Makefile — decided in Phase 0
+├── CMakeLists.txt              # three targets: dep-analyzer, unit-tests, bench
 ├── src/
-│   ├── main.cpp                # menu bootstrap
-│   ├── app/                    # menu, session, output formatting, report saving
-│   ├── io/                     # include_parser.h, project_scanner.h (Phase 3,
-│   │                           #   as-built: discovery, parsing, resolution,
-│   │                           #   summary/warnings; Trie population deferred)
-│   ├── ds/                     # pure custom structures (testable in isolation)
-│   ├── graph/                  # dependency_graph.h (model, Phase 2, as-built) +
-│   │                           #   algorithms (BFS variants, DFS/SCC, topo, chains)
-│   └── benchmark/              # generator, runner, timer, CSV
+│   ├── main.cpp                # menu bootstrap (delegates to app::run)
+│   ├── app/                    # menu loop, option handlers, app state (Phases 7;
+│   │                           #   F9 report saving deferred, not implemented)
+│   ├── io/                     # include_parser.h, project_scanner.h (Phase 3 as-built:
+│   │                           #   discovery, parsing, resolution, summary/warnings)
+│   ├── ds/                     # seven pure custom structures (testable in isolation)
+│   ├── graph/                  # dependency_graph.h (model, Phase 2) + analysis.h
+│   │                           #   (F2–F8, Phase 4) + bfs.h (B1–B6, Phase 5)
+│   └── bench/                  # graph_generators.h, benchmark_runner.h, bench_main.cpp
+│                               #   (Phases 5–6; frozen record in results/frozen/)
 ├── tests/
-│   ├── test_framework.h        # tiny assert harness (no external deps)
-│   ├── ds_tests.cpp graph_tests.cpp io_tests.cpp analysis_tests.cpp
-│   └── fixtures/sample_project/ # ~10 files incl. cycles, unresolved include, dup basename
+│   ├── test_framework.h, test_main.cpp   # tiny self-registering harness (no external deps)
+│   ├── ds_tests.cpp graph_tests.cpp io_tests.cpp
+│   ├── analysis_tests.cpp bfs_tests.cpp bench_tests.cpp app_tests.cpp
+│   └── fixtures/sample_project/ # 12 files incl. planted cycle, unresolved include,
+│                                #   duplicate basenames
 └── results/                    # CSV outputs (git-ignored; never commit invented numbers)
 ```
 

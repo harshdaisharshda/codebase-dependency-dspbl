@@ -36,10 +36,35 @@ struct AppState
     }
 };
 
+// Whitespace treated as padding: spaces, tabs, and a CRLF carriage-return
+// leftover (getline strips only '\n', so piped/editable input can carry '\r').
+inline bool isPaddingChar(char c)
+{
+    return c == ' ' || c == '\t' || c == '\r';
+}
+
+// Trims leading/trailing padding characters in place. Pasted paths and menu
+// answers frequently carry surrounding whitespace; treating it as significant
+// made exact path lookups fail that clean input handles (Phase 8 fix).
+inline void trimWhitespace(std::string& text)
+{
+    std::size_t begin = 0;
+    std::size_t end = text.size();
+    while (begin < end && isPaddingChar(text[begin]))
+        ++begin;
+    while (end > begin && isPaddingChar(text[end - 1]))
+        --end;
+    if (begin != 0 || end != text.size())
+        text = text.substr(begin, end - begin);
+}
+
 // Parses a free-form line as a number; false when the line is not a
 // parseable integer (tolerant-input requirement, AGENTS.md §6).
-inline bool parseMenuChoice(const std::string& line, int& choice)
+// Takes the line by value and trims it, so " 5 " and "5\r" parse like "5"
+// and a whitespace-only line is simply not a number.
+inline bool parseMenuChoice(std::string line, int& choice)
 {
+    trimWhitespace(line);
     if (line.empty())
         return false;
     std::size_t index = 0;

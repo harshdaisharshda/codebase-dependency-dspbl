@@ -169,3 +169,95 @@ TEST(app_menu, ds_demonstrations_run_on_real_structures)
     CHECK(contains(output, "level 0: (5,0)"));
     CHECK(contains(output, "extractMax() -> (5,0)"));
 }
+
+// ---------------------------------------------------------------------------
+// Phase 8 regression — whitespace-tolerant input (trimWhitespace fix).
+// Origin: a real fmt-repository run failed every file pick once pasted paths
+// carried a leading/trailing space or tab ("No file matches " src/os.cc"").
+// ---------------------------------------------------------------------------
+
+TEST(app_menu, parse_menu_choice_accepts_padded_and_crlf_lines)
+{
+    // Direct unit level: the shared parser trims spaces, tabs and the CRLF
+    // carriage-return leftover; whitespace-only lines are "not a number".
+    int value = 0;
+    CHECK(app::parseMenuChoice(" 5 ", value));
+    CHECK_EQ(value, 5);
+    CHECK(app::parseMenuChoice("\t3\r", value));
+    CHECK_EQ(value, 3);
+    CHECK(app::parseMenuChoice("0\r", value));
+    CHECK_EQ(value, 0);
+    CHECK(!app::parseMenuChoice("   ", value));
+    CHECK(!app::parseMenuChoice(" 5x ", value)); // padding does not rescue garbage
+}
+
+TEST(app_menu, file_picks_tolerate_surrounding_whitespace)
+{
+    // Leading space and trailing space used to fail the exact-path lookup
+    // AND the basename-prefix search (both saw the untrimmed line).
+    const auto [code, output] =
+        runScripted("1\n\n3\n main.cpp\n3\napi/api.h \n0\n");
+    CHECK_EQ(code, 0);
+    CHECK(contains(output, "Transitive dependencies of main.cpp"));
+    CHECK(contains(output, "Transitive dependencies of api/api.h"));
+    CHECK(!contains(output, "No file matches"));
+}
+
+TEST(app_menu, crlf_terminated_input_parses_everywhere)
+{
+    // Piped Windows-style input: getline keeps the '\r' of every line; the
+    // menu choice, the scan default and the file pick must all survive it.
+    const auto [code, output] =
+        runScripted("1\r\n\n3\r\nmain.cpp\r\n0\r\n");
+    CHECK_EQ(code, 0);
+    CHECK(contains(output, "Transitive dependencies of main.cpp"));
+    CHECK(contains(output, "Bye."));
+}
+
+TEST(app_menu, whitespace_only_input_behaves_like_empty)
+{
+    // Picker prompts promise "empty line = cancel"; a whitespace-only line
+    // trims to empty, so it cancels instead of erroring.
+    const auto [code, output] = runScripted("1\n\n3\n   \n5\n\t\n6\n \n0\n");
+    CHECK_EQ(code, 0);
+    CHECK(!contains(output, "No file matches"));
+    CHECK(!contains(output, "No stored file name starts with"));
+    // The cancelled option-5 START pick must not reach the TARGET prompt.
+    CHECK(occurrences(output, "Path START file") == 1u);
+    CHECK(!contains(output, "Path TARGET file"));
+    CHECK(contains(output, "Bye."));
+}
+
+TEST(app_menu, numbered_selection_accepts_padded_choice)
+{
+    // The sub-selection read used to reject " 2\t" via parseMenuChoice's
+    // old trailing-whitespace rule.
+    const auto [code, output] = runScripted("1\n\n3\napi.h\n 2\t\n0\n");
+    CHECK_EQ(code, 0);
+    CHECK(contains(output, "2 files match \"api.h\""));
+    CHECK(contains(output, "level 0 (the file itself): network/api.h"));
+    CHECK(!contains(output, "Invalid selection."));
+}
+
+TEST(app_menu, scan_prompt_whitespace_only_uses_fixture_default)
+{
+    // Option 1's empty line = bundled fixture; whitespace-only is the same
+    // "default" input after trimming.
+    const auto [code, output] = runScripted("1\n \n2\n0\n");
+    CHECK_EQ(code, 0);
+    CHECK(contains(output, "1: api/api.h"));
+}
+
+TEST(app_menu, scan_prompt_trailing_space_still_scans)
+{
+    // Explicit directory pasted with a trailing space (the option-1 variant
+    // of the fmt report — the untrimmed path made the scan fatal).
+    const std::string fixtureRoot = bench::locateFixtureRoot();
+    if (fixtureRoot.empty())
+        return; // no fixture discoverable in this environment
+    const auto [code, output] =
+        runScripted("1\n" + fixtureRoot + " \n2\n0\n");
+    CHECK_EQ(code, 0);
+    CHECK(contains(output, "files scanned:        12"));
+    CHECK(contains(output, "1: api/api.h"));
+}
